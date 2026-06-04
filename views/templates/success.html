@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login realizado</title>
+    <link rel="stylesheet" href="/static/css/login.css">
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"
+            integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
+            crossorigin="anonymous"></script>
+</head>
+<body>
+    <main id="auth-page" class="page page-success">
+        <section class="panel">
+            <h1>Login realizado com sucesso</h1>
+            <p>Usuário autenticado: <strong>{{.Username}}</strong></p>
+            <p>
+                <a class="link-back"
+                   href="/"
+                   hx-get="/"
+                   hx-target="#auth-page"
+                   hx-select="#auth-page"
+                   hx-swap="outerHTML">Voltar</a>
+            </p>
+        </section>
+    </main>
+</body>
+</html>
