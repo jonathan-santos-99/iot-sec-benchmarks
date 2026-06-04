@@ -1,0 +1,6 @@
+bin/
+.vscode
+.env
+mosquitto/config/pwfile
+mosquitto/data/*
+mosquitto/log/*
