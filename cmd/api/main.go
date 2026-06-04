@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 
 	auth "fishSim/internal"
@@ -14,7 +15,10 @@ type application struct {
 }
 
 func main() {
-	authService := auth.NewService()
+	pwfile := flag.String("pwfile", "data/pwfile", "The full path for users file")
+	flag.Parse()
+
+	authService := auth.NewService(*pwfile)
 	renderer, err := views.NewRenderer()
 	if err != nil {
 		log.Fatal(err)

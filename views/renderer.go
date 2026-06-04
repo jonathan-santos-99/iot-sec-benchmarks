@@ -15,6 +15,7 @@ type Renderer struct {
 
 type LoginPageData struct {
 	ErrorMessage string
+	Username     string
 }
 
 type LoginSuccessData struct {

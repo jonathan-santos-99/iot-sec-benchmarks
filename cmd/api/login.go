@@ -11,14 +11,37 @@ import (
 )
 
 func (app *application) handleHomePage(w http.ResponseWriter, r *http.Request) {
-	cookie, _ := r.Cookie("session_token")
-	username := app.sessions[cookie.Value]
-	app.render(w, http.StatusOK, func(writer io.Writer) error {
-		return app.renderer.RenderLoginSuccess(writer, views.LoginSuccessData{Username: username})
-	})
+	cookie, err := r.Cookie("session_token")
+	if err != nil {
+		app.render(w, http.StatusOK, func(writer io.Writer) error {
+			return app.renderer.RenderLoginPage(writer, views.LoginPageData{})
+		})
+		return
+	}
+
+	username, ok := app.authService.IsLogged(cookie.Value)
+	if ok {
+		app.render(w, http.StatusOK, func(writer io.Writer) error {
+			return app.renderer.RenderLoginSuccess(writer, views.LoginSuccessData{Username: username})
+		})
+	} else {
+		app.render(w, http.StatusOK, func(writer io.Writer) error {
+			return app.renderer.RenderLoginPage(writer, views.LoginPageData{})
+		})
+	}
 }
 
 func (app *application) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("session_token")
+	if err == nil {
+		username, ok := app.authService.IsLogged(cookie.Value)
+		if ok {
+			app.render(w, http.StatusOK, func(writer io.Writer) error {
+				return app.renderer.RenderLoginSuccess(writer, views.LoginSuccessData{Username: username})
+			})
+		}
+	}
+
 	app.render(w, http.StatusOK, func(writer io.Writer) error {
 		return app.renderer.RenderLoginPage(writer, views.LoginPageData{})
 	})
@@ -43,6 +66,7 @@ func (app *application) handleLogin(w http.ResponseWriter, r *http.Request) {
 		app.render(w, http.StatusOK, func(writer io.Writer) error {
 			return app.renderer.RenderLoginPage(writer, views.LoginPageData{
 				ErrorMessage: "Credenciais inválidas. Tente novamente.",
+				Username:     username,
 			})
 		})
 		return
