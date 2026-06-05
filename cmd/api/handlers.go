@@ -19,10 +19,10 @@ func (app *application) handleHomePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username, ok := app.authService.IsLogged(cookie.Value)
+	_, ok := app.authService.IsLogged(cookie.Value)
 	if ok {
 		app.render(w, http.StatusOK, func(writer io.Writer) error {
-			return app.renderer.RenderLoginSuccess(writer, views.LoginSuccessData{Username: username})
+			return app.renderer.RenderHomePage(writer)
 		})
 	} else {
 		app.render(w, http.StatusOK, func(writer io.Writer) error {
@@ -34,11 +34,12 @@ func (app *application) handleHomePage(w http.ResponseWriter, r *http.Request) {
 func (app *application) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session_token")
 	if err == nil {
-		username, ok := app.authService.IsLogged(cookie.Value)
+		_, ok := app.authService.IsLogged(cookie.Value)
 		if ok {
 			app.render(w, http.StatusOK, func(writer io.Writer) error {
-				return app.renderer.RenderLoginSuccess(writer, views.LoginSuccessData{Username: username})
+				return app.renderer.RenderHomePage(writer)
 			})
+			return
 		}
 	}
 
@@ -85,10 +86,21 @@ func (app *application) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, cookie)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
 
-	app.render(w, http.StatusOK, func(writer io.Writer) error {
-		return app.renderer.RenderLoginSuccess(writer, views.LoginSuccessData{Username: username})
-	})
+func (app *application) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "método não permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	metrics := app.metricsService.GetMetrics()
+
+	err := app.writeJSON(w, 200, envelope{"data": metrics})
+	if err != nil {
+		app.errorResponse(w, 500, envelope{"error": err})
+	}
 }
 
 func (app *application) render(w http.ResponseWriter, statusCode int, renderFn func(io.Writer) error) {

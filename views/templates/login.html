@@ -1,51 +1,29 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
+{{define "title"}}Login{{end}}
 
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Login</title>
-    <link rel="stylesheet" href="/static/css/login.css">
-    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"
-            integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
-            crossorigin="anonymous"></script>
-</head>
+{{define "content"}}
+<section class="card">
+    <form method="post" action="/login">
+        <label>
+            Usuário
+            <input type="text" name="username" placeholder="usuário" value="{{.Username}}" required>
+        </label>
+        <label>
+            Senha
+            <input type="password" name="password" placeholder="••••••••" required>
+        </label>
 
-<body>
-    <main id="auth-page" class="page page-login">
-        <section class="card">
-            <form method="post"
-                  action="/login"
-                  hx-post="/login"
-                  hx-target="#auth-page"
-                  hx-select="#auth-page"
-                  hx-swap="outerHTML"
-                  hx-indicator="#login-indicator">
+        {{if .ErrorMessage}}
+        <div id="login-feedback" aria-live="polite">
+            <p class="error">{{.ErrorMessage}}</p>
+        </div>
+        {{end}}
 
+        <button type="submit">
+            <span>Entrar</span>
+        </button>
 
-                <label>
-                    Usuário
-                    <input type="text" name="username" placeholder="usuário" value="{{.Username}}" required>
-                </label>
-                <label>
-                    Senha
-                    <input type="password" name="password" placeholder="••••••••" required>
-                </label>
+    </form>
+</section>
+{{end}}
 
-                {{if .ErrorMessage}}
-                <div id="login-feedback" aria-live="polite">
-                    <p class="error">{{.ErrorMessage}}</p>
-                </div>
-                {{end}}
-
-                <button type="submit">
-                    <span>Entrar</span>
-                    <span id="login-indicator" class="htmx-indicator">Validando...</span>
-                </button>
-
-            </form>
-        </section>
-    </main>
-</body>
-
-</html>
+{{template "layout" .}}

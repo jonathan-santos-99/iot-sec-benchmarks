@@ -1,0 +1,16 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{block "title" .}}fishSim{{end}}</title>
+    <link rel="stylesheet" href="/static/css/stylesheet.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <main class="page {{block "pageClass" .}}{{end}}">
+        {{block "content" .}}{{end}}
+    </main>
+</body>
+</html>
+{{end}}

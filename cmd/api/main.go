@@ -4,14 +4,16 @@ import (
 	"flag"
 	"log"
 
-	auth "fishSim/internal"
+	"fishSim/internal/auth"
+	"fishSim/internal/metrics"
 	"fishSim/views"
 )
 
 type application struct {
-	authService *auth.Service
-	renderer    *views.Renderer
-	sessions    map[string]string
+	authService    *auth.Service
+	metricsService *metrics.Service
+	renderer       *views.Renderer
+	sessions       map[string]string
 }
 
 func main() {
@@ -19,15 +21,17 @@ func main() {
 	flag.Parse()
 
 	authService := auth.NewService(*pwfile)
+	metricsService := metrics.NewService()
 	renderer, err := views.NewRenderer()
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	app := application{
-		authService: authService,
-		renderer:    renderer,
-		sessions:    make(map[string]string),
+		authService:    authService,
+		metricsService: metricsService,
+		renderer:       renderer,
+		sessions:       make(map[string]string),
 	}
 
 	app.serve()

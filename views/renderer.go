@@ -2,6 +2,7 @@ package views
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"io"
 )
@@ -9,8 +10,15 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
+const layoutFile = "templates/layout.html"
+
+var pages = map[string]string{
+	"login.html": "templates/login.html",
+	"home.html":  "templates/home.html",
+}
+
 type Renderer struct {
-	templates *template.Template
+	templates map[string]*template.Template
 }
 
 type LoginPageData struct {
@@ -18,23 +26,30 @@ type LoginPageData struct {
 	Username     string
 }
 
-type LoginSuccessData struct {
-	Username string
-}
-
 func NewRenderer() (*Renderer, error) {
-	templates, err := template.ParseFS(templateFS, "templates/*.html")
-	if err != nil {
-		return nil, err
+	templates := make(map[string]*template.Template, len(pages))
+	for name, path := range pages {
+		t, err := template.ParseFS(templateFS, layoutFile, path)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", name, err)
+		}
+		templates[name] = t
 	}
-
 	return &Renderer{templates: templates}, nil
 }
 
-func (r *Renderer) RenderLoginPage(w io.Writer, data LoginPageData) error {
-	return r.templates.ExecuteTemplate(w, "login.html", data)
+func (r *Renderer) render(w io.Writer, name string, data any) error {
+	t, ok := r.templates[name]
+	if !ok {
+		return fmt.Errorf("template %q não encontrado", name)
+	}
+	return t.ExecuteTemplate(w, "layout", data)
 }
 
-func (r *Renderer) RenderLoginSuccess(w io.Writer, data LoginSuccessData) error {
-	return r.templates.ExecuteTemplate(w, "success.html", data)
+func (r *Renderer) RenderLoginPage(w io.Writer, data LoginPageData) error {
+	return r.render(w, "login.html", data)
+}
+
+func (r *Renderer) RenderHomePage(w io.Writer) error {
+	return r.render(w, "home.html", nil)
 }

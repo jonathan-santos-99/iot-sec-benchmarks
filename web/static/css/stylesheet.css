@@ -10,15 +10,8 @@ body {
     justify-content: center;
     padding: 24px;
     box-sizing: border-box;
-}
-
-.page-login {
     background: linear-gradient(135deg, #0f172a, #1d4ed8);
-}
 
-.page-success {
-    background: #0f172a;
-    color: white;
 }
 
 .card,
@@ -97,23 +90,6 @@ button:hover {
     background: #1d4ed8;
 }
 
-form.htmx-request button {
-    cursor: wait;
-    opacity: 0.8;
-}
-
-.htmx-indicator {
-    display: none;
-}
-
-.htmx-request .htmx-indicator {
-    display: inline;
-}
-
-.htmx-indicator.htmx-request {
-    display: inline;
-}
-
 .error {
     margin: 0 0 16px;
     padding: 12px;
@@ -138,4 +114,24 @@ code {
 
 .link-back {
     color: #93c5fd;
+}
+
+.chart-panel {
+    max-width: 900px;
+    margin: 2rem auto;
+    padding: 1.5rem;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.chart-panel h2 {
+    margin-top: 0;
+    font-size: 1.1rem;
+    color: #333;
+}
+
+.chart-wrapper {
+    position: relative;
+    height: 320px;
 }
