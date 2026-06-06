@@ -18,11 +18,11 @@
         if (!canvas) return;
 
         const PALETTE = [
-            { border: '#2563eb', bg: 'rgba(37, 99, 235, 0.15)' },
-            { border: '#dc2626', bg: 'rgba(220, 38, 38, 0.15)' },
-            { border: '#16a34a', bg: 'rgba(22, 163, 74, 0.15)' },
-            { border: '#9333ea', bg: 'rgba(147, 51, 234, 0.15)' },
-            { border: '#ea580c', bg: 'rgba(234, 88, 12, 0.15)' },
+            { border: '#2563eb', bg: 'rgba( 37,  99, 235, 0.15)' },
+            { border: '#dc2626', bg: 'rgba(220,  38,  38, 0.15)' },
+            { border: '#16a34a', bg: 'rgba( 22, 163,  74, 0.15)' },
+            { border: '#9333ea', bg: 'rgba(147,  51, 234, 0.15)' },
+            { border: '#ea580c', bg: 'rgba(234,  88,  12, 0.15)' },
         ];
 
         const chart = new Chart(canvas.getContext('2d'), {
@@ -38,10 +38,10 @@
                     title: { display: false },
                 },
                 scales: {
-                    x: { title: { display: true, text: 'Amostra' } },
+                    x: { title: { display: true, text: 'Tempo' } },
                     y: {
                         beginAtZero: true,
-                        title: { display: true, text: 'Requests/seg' },
+                        title: { display: true, text: 'Requests' },
                     },
                 },
             },
@@ -68,12 +68,12 @@
             const series = payload.data
             if (series.length === 0) return;
 
-            const maxLen = series.reduce((acc, s) => Math.max(acc, s.request_count.length), 0);
-            chart.data.labels = Array.from({ length: maxLen }, (_, i) => `${i + 1}`);
+            const maxLen = series.reduce((acc, s) => Math.max(acc, s.requests_per_second.length), 0);
+            chart.data.labels = Array.from({ length: maxLen }, (_, i) => `${i + 1}s`);
 
             series.forEach((entry, i) => {
                 const ds = datasetFor(entry.type || `serie-${i}`, i);
-                ds.data = entry.request_count || [];
+                ds.data = entry.requests_per_second || [];
             });
 
             chart.update('none');

@@ -67,9 +67,9 @@ func parseCmd(raw []byte) (Command, error) {
 	}, nil
 }
 
-func newMessage(cmdId int, msgType MsgType, data int, seq *int) string {
-	message := fmt.Sprintf("%d;%d;%d;%d", cmdId, msgType, data, *seq)
-	*seq += 1
+func newMessage(cmdId int, msgType MsgType, data int) string {
+	usec := time.Now().UnixNano()
+	message := fmt.Sprintf("%d;%d;%d;%d", cmdId, msgType, data, usec)
 	return message
 }
 
@@ -85,8 +85,7 @@ func onMessageReceived(c mqtt.Client, message mqtt.Message) {
 		return
 	}
 
-	count := 0
-	publish(c, newMessage(cmd.id, Start, 0, &count))
+	publish(c, newMessage(cmd.id, Start, 0))
 	timeout := time.After(cmd.duration * time.Second)
 finish:
 	for {
@@ -94,13 +93,12 @@ finish:
 		case <-timeout:
 			break finish
 		default:
-			randomNum := rand.IntN(100)
-			publish(c, newMessage(cmd.id, Continue, randomNum, &count))
-			time.Sleep(100 * time.Millisecond)
+			data := rand.IntN(100)
+			publish(c, newMessage(cmd.id, Continue, data))
 		}
 	}
 
-	publish(c, newMessage(cmd.id, Stop, 0, &count))
+	publish(c, newMessage(cmd.id, Stop, 0))
 }
 
 func main() {
@@ -109,16 +107,20 @@ func main() {
 	mqtt.CRITICAL = log.New(os.Stdout, "[CRIT] ", 0)
 	mqtt.WARN = log.New(os.Stdout, "[WARN]  ", 0)
 
-	server := flag.String("mqtt_server", "tcp://127.0.0.1:1883", "The full url of the MQTT server to connect to ex: tcp://127.0.0.1:1883")
+	server := flag.String(
+		"mqtt_server",
+		"tcp://127.0.0.1:1883", "The full url of the MQTT server to connect")
 	username := flag.String("mqtt_user", "", "A username to authenticate to the MQTT server")
 	password := flag.String("mqtt_pass", "", "Password to match the MQTT username")
-	ouboundTopic = flag.String("mqtt_outbound_topic", "", "Outbound topic (where metrics will be sended)")
-	inboudTopic = flag.String("mqtt_inbound_topic", "", "Inbound topic (where the commands are sended)")
+	ouboundTopic = flag.String("mqtt_outbound_topic", "",
+		"Outbound topic (where metrics will be sent)")
+	inboudTopic = flag.String("mqtt_inbound_topic", "",
+		"Inbound topic (where the commands are received)")
 
 	flag.Parse()
 
 	hostname, _ := os.Hostname()
-	clientid := hostname + strconv.Itoa(time.Now().Second())
+	clientid := "mock-microcontroler-" + hostname + strconv.Itoa(time.Now().Second())
 	opts := mqtt.NewClientOptions().AddBroker(*server).SetClientID(clientid).SetCleanSession(true)
 	opts.SetKeepAlive(2 * time.Second)
 	opts.SetPingTimeout(1 * time.Second)

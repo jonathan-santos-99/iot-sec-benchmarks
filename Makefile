@@ -7,7 +7,13 @@ build:
 	go build -o bin/fishSim ./cmd/api
 
 run: build
-	./bin/fishSim -pwfile data/pwfile
+	@echo "Running API..."
+	@./bin/fishSim -pwfile data/pwfile 						   \
+				   -mqtt_server         $(MQTT_SERVER)         \
+				   -mqtt_user           $(MQTT_USER)           \
+				   -mqtt_pass           $(MQTT_PASS)           \
+				   -mqtt_outbound_topic $(MQTT_OUTBOUND_TOPIC) \
+				   -mqtt_inbound_topic  $(MQTT_INBOUND_TOPIC)
 
 add_user: data/add_user.py
 	data/add_user.py data/pwfile
@@ -30,7 +36,7 @@ setup_moquistto:
 
 send_message:
 	@mosquitto_pub -t $(MQTT_INBOUND_TOPIC) \
-				   -m '1;1;2'               \
+				   -m '1;1;10'              \
 				   -u $(MQTT_USER)          \
 				   -P $(MQTT_PASS)
 
