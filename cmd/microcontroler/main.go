@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fishSim/internal/topics"
 	"flag"
 	"fmt"
 	"log"
@@ -14,20 +15,12 @@ import (
 )
 
 var (
-	ouboundTopic *string
-	inboudTopic  *string
-)
-
-type Algorithm int
-
-const (
-	PlainText Algorithm = iota
-	AES
+	inboudTopic *string
 )
 
 type Command struct {
 	id        int
-	algorithm Algorithm
+	algorithm topics.Algorithm
 	duration  time.Duration
 }
 
@@ -62,7 +55,7 @@ func parseCmd(raw []byte) (Command, error) {
 
 	return Command{
 		parsedParts[0],
-		Algorithm(parsedParts[1]),
+		topics.Algorithm(parsedParts[1]),
 		time.Duration(parsedParts[2]),
 	}, nil
 }
@@ -73,8 +66,22 @@ func newMessage(cmdId int, msgType MsgType, data int) string {
 	return message
 }
 
-func publish(c mqtt.Client, data string) {
-	c.Publish(*ouboundTopic, 0, false, data)
+func publish(c mqtt.Client, algorithm topics.Algorithm, data string) {
+	var encrypted string
+	switch algorithm {
+	case topics.PlainText:
+		encrypted = data
+	case topics.AES:
+
+	}
+
+	topicInfo, ok := topics.OutboundTopics[algorithm]
+	if !ok {
+		log.Printf("Could not find topic for algorithm %d\n", algorithm)
+		return
+	}
+
+	c.Publish(topicInfo.Topic, 0, false, encrypted)
 }
 
 func onMessageReceived(c mqtt.Client, message mqtt.Message) {
@@ -85,7 +92,7 @@ func onMessageReceived(c mqtt.Client, message mqtt.Message) {
 		return
 	}
 
-	publish(c, newMessage(cmd.id, Start, 0))
+	publish(c, cmd.algorithm, newMessage(cmd.id, Start, 0))
 	timeout := time.After(cmd.duration * time.Second)
 finish:
 	for {
@@ -94,15 +101,14 @@ finish:
 			break finish
 		default:
 			data := rand.IntN(100)
-			publish(c, newMessage(cmd.id, Continue, data))
+			publish(c, cmd.algorithm, newMessage(cmd.id, Continue, data))
 		}
 	}
 
-	publish(c, newMessage(cmd.id, Stop, 0))
+	publish(c, cmd.algorithm, newMessage(cmd.id, Stop, 0))
 }
 
 func main() {
-
 	mqtt.ERROR = log.New(os.Stdout, "[ERROR] ", 0)
 	mqtt.CRITICAL = log.New(os.Stdout, "[CRIT] ", 0)
 	mqtt.WARN = log.New(os.Stdout, "[WARN]  ", 0)
@@ -112,12 +118,14 @@ func main() {
 		"tcp://127.0.0.1:1883", "The full url of the MQTT server to connect")
 	username := flag.String("mqtt_user", "", "A username to authenticate to the MQTT server")
 	password := flag.String("mqtt_pass", "", "Password to match the MQTT username")
-	ouboundTopic = flag.String("mqtt_outbound_topic", "",
-		"Outbound topic (where metrics will be sent)")
 	inboudTopic = flag.String("mqtt_inbound_topic", "",
 		"Inbound topic (where the commands are received)")
 
+	mqttOutboundConfigFile := flag.String("mqtt_outbound_config", "", "JSON file with information abount outbound topics")
+
 	flag.Parse()
+
+	topics.ParseConfigFile(*mqttOutboundConfigFile)
 
 	hostname, _ := os.Hostname()
 	clientid := "mock-microcontroler-" + hostname + strconv.Itoa(time.Now().Second())

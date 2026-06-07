@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"cmp"
+	"fishSim/internal/topics"
 	"fmt"
 	"log"
 	"os"
@@ -18,16 +19,9 @@ type Service struct {
 	client mqtt.Client
 }
 
-type Algorithm int
-
-const (
-	PlainText Algorithm = iota
-	AES
-)
-
 type Metric struct {
 	id        int
-	algorithm Algorithm
+	algorithm topics.Algorithm
 	start     time.Time
 	end       *time.Time
 	mu        sync.Mutex
@@ -78,7 +72,7 @@ func (s *Service) GetMetrics() []MetricsOutput {
 
 		out = append(out, MetricsOutput{
 			Id:   metric.id,
-			Type: toString(metric.algorithm),
+			Type: metric.algorithm.String(),
 			Reqs: reqsPerSec,
 		})
 	}
@@ -86,22 +80,16 @@ func (s *Service) GetMetrics() []MetricsOutput {
 	return out
 }
 
-func NewService(
-	mqtt_server,
-	mqtt_username,
-	mqtt_password,
-	mqtt_ouboundTopic,
-	mqtt_inboudTopic string,
-) *Service {
+func NewService(server, username, password, inboundTopic, mqttOutboundConfigFile string) *Service {
 	hostname, _ := os.Hostname()
 	clientid := "server-" + hostname + strconv.Itoa(time.Now().Second())
 	opts := mqtt.
 		NewClientOptions().
-		AddBroker(mqtt_server).
+		AddBroker(server).
 		SetClientID(clientid).
 		SetCleanSession(true).
-		SetUsername(mqtt_username).
-		SetPassword(mqtt_password).
+		SetUsername(username).
+		SetPassword(password).
 		SetKeepAlive(2 * time.Second).
 		SetPingTimeout(1 * time.Second).
 		SetConnectionNotificationHandler(func(client mqtt.Client, n mqtt.ConnectionNotification) {
@@ -123,10 +111,14 @@ func NewService(
 			}
 		})
 
+	topics.ParseConfigFile(mqttOutboundConfigFile)
+
 	opts.OnConnect = func(c mqtt.Client) {
-		token := c.Subscribe(mqtt_ouboundTopic, 0, handleMessage)
-		if token.Wait() && token.Error() != nil {
-			panic(token.Error())
+		for _, topicInfo := range topics.OutboundTopics {
+			token := c.Subscribe(topicInfo.Topic, 0, handleMessage)
+			if token.Wait() && token.Error() != nil {
+				panic(token.Error())
+			}
 		}
 	}
 
@@ -154,8 +146,14 @@ type outboundMessage struct {
 }
 
 func handleMessage(c mqtt.Client, message mqtt.Message) {
+	algorithm, ok := topics.FindAlgorithm(message.Topic())
+	if !ok {
+		log.Printf("Could not find config for topic '%s'", message.Topic())
+		return
+	}
+
 	raw := message.Payload()
-	parsedMessage, err := parseMessage(raw)
+	parsedMessage, err := parseMessage(algorithm, raw)
 	if err != nil {
 		log.Printf("Could not parse message '%s': %s", raw, err)
 		return
@@ -165,7 +163,7 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 	if !ok {
 		db.mu.Lock()
 		record = new(Metric)
-		record.algorithm = PlainText
+		record.algorithm = topics.PlainText
 		record.id = parsedMessage.cmdId
 		db.data[parsedMessage.cmdId] = record
 		db.mu.Unlock()
@@ -198,9 +196,16 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 	}
 }
 
-func parseMessage(raw []byte) (outboundMessage, error) {
+func parseMessage(algorithm topics.Algorithm, raw []byte) (outboundMessage, error) {
+	var decrypted []byte
+	switch algorithm {
+	case topics.PlainText:
+		decrypted = raw
+	case topics.AES:
+	}
+
 	const TOTAL_PARTS = 4
-	parts := strings.SplitN(string(raw), ";", TOTAL_PARTS)
+	parts := strings.SplitN(string(decrypted), ";", TOTAL_PARTS)
 	if len(parts) < TOTAL_PARTS {
 		return outboundMessage{}, fmt.Errorf(
 			"Message has incompatible number of components. Expected: %d, actual: %d",
@@ -234,15 +239,4 @@ func parseMessage(raw []byte) (outboundMessage, error) {
 	message.data = data
 	message.timestamp = timestamp
 	return message, nil
-}
-
-func toString(a Algorithm) string {
-	switch a {
-	case PlainText:
-		return "PLAIN_TEXT"
-	case AES:
-		return "AES"
-	}
-
-	return "UNKNOW"
 }

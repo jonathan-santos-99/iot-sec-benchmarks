@@ -25,21 +25,20 @@ func main() {
 	mqtt.WARN = log.New(os.Stdout, "[MQTT_WARN]  ", 0)
 
 	pwfile := flag.String("pwfile", "data/pwfile", "The full path for users file")
-	mqtt_server := flag.String("mqtt_server", "tcp://127.0.0.1:1883", "The full url of the MQTT server to connect to ex: tcp://127.0.0.1:1883")
-	mqtt_username := flag.String("mqtt_user", "", "A username to authenticate to the MQTT server")
-	mqtt_password := flag.String("mqtt_pass", "", "Password to match the MQTT username")
-	mqtt_ouboundTopic := flag.String("mqtt_outbound_topic", "", "Outbound topic (where metrics will be sended)")
-	mqtt_inboudTopic := flag.String("mqtt_inbound_topic", "", "Inbound topic (where the commands are sended)")
-
+	mqttServer := flag.String("mqtt_server", "tcp://127.0.0.1:1883", "The full url of the MQTT server to connect to ex: tcp://127.0.0.1:1883")
+	mqttUsername := flag.String("mqtt_user", "", "A username to authenticate to the MQTT server")
+	mqttPassword := flag.String("mqtt_pass", "", "Password to match the MQTT username")
+	mqttInboundTopic := flag.String("mqtt_inbound_topic", "", "Inbound topic")
+	mqttOutboundConfigFile := flag.String("mqtt_outbound_config", "", "JSON file with information abount outbound topics")
 	flag.Parse()
 
 	authService := auth.NewService(*pwfile)
 	metricsService := metrics.NewService(
-		*mqtt_server,
-		*mqtt_username,
-		*mqtt_password,
-		*mqtt_ouboundTopic,
-		*mqtt_inboudTopic,
+		*mqttServer,
+		*mqttUsername,
+		*mqttPassword,
+		*mqttInboundTopic,
+		*mqttOutboundConfigFile,
 	)
 
 	renderer, err := views.NewRenderer()

@@ -1,0 +1,10 @@
+{
+    "PLAIN_TEXT": {
+        "topic": "outbound/plain",
+        "key": ""
+    },
+    "AES": {
+        "topic": "outbound/aes",
+        "key": "passphrasewhichneedstobe32bytess"
+    }
+}
