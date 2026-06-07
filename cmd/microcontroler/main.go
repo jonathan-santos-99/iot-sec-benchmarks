@@ -17,7 +17,9 @@ import (
 )
 
 var (
-	inboudTopic *string
+	inboudTopic  *string
+	commandQueue = make(chan Command, 1024) // buffered channel
+	c            mqtt.Client
 )
 
 type Command struct {
@@ -95,25 +97,38 @@ func onMessageReceived(c mqtt.Client, message mqtt.Message) {
 	data := message.Payload()
 	cmd, err := parseCmd(data)
 	if err != nil {
-		fmt.Printf("Could not parse message '%s': %s", data, err)
+		log.Printf("Could not parse message '%s': %s\n", data, err)
 		return
 	}
 
-	publish(c, cmd.algorithm, newMessage(cmd.id, Start, 0, cmd.checksum))
-	timeout := time.After(cmd.duration * time.Second)
-finish:
-	for {
-		select {
-		case <-timeout:
-			break finish
-		default:
-			data := rand.IntN(100)
-			msg := newMessage(cmd.id, Continue, data, cmd.checksum)
-			publish(c, cmd.algorithm, msg)
-		}
+	// Non-blocking send to queue
+	select {
+	case commandQueue <- cmd:
+		log.Printf("Command queued: %d\n", cmd.id)
+	default:
+		log.Printf("Command queue full, dropping command: %d\n", cmd.id)
 	}
+}
 
-	publish(c, cmd.algorithm, newMessage(cmd.id, Stop, 0, cmd.checksum))
+func processCommands() {
+	for cmd := range commandQueue {
+		publish(c, cmd.algorithm, newMessage(cmd.id, Start, 0, cmd.checksum))
+		timeout := time.After(cmd.duration * time.Second)
+	finish:
+		for {
+			select {
+			case <-timeout:
+				break finish
+			default:
+				data := rand.IntN(100)
+				msg := newMessage(cmd.id, Continue, data, cmd.checksum)
+				publish(c, cmd.algorithm, msg)
+			}
+		}
+
+		publish(c, cmd.algorithm, newMessage(cmd.id, Stop, 0, cmd.checksum))
+		log.Printf("Finished command: %d\n", cmd.id)
+	}
 }
 
 func main() {
@@ -137,9 +152,13 @@ func main() {
 
 	hostname, _ := os.Hostname()
 	clientid := "mock-microcontroler-" + hostname + strconv.Itoa(time.Now().Second())
-	opts := mqtt.NewClientOptions().AddBroker(*server).SetClientID(clientid).SetCleanSession(true)
-	opts.SetKeepAlive(2 * time.Second)
-	opts.SetPingTimeout(1 * time.Second)
+	opts := mqtt.
+		NewClientOptions().
+		AddBroker(*server).
+		SetClientID(clientid).
+		SetCleanSession(true).
+		SetKeepAlive(2 * time.Second).
+		SetPingTimeout(1 * time.Second)
 
 	if *username != "" {
 		opts.SetUsername(*username)
@@ -151,17 +170,17 @@ func main() {
 	opts.SetConnectionNotificationHandler(func(client mqtt.Client, notification mqtt.ConnectionNotification) {
 		switch n := notification.(type) {
 		case mqtt.ConnectionNotificationConnected:
-			fmt.Printf("[NOTIFICATION] connected\n")
+			log.Printf("[NOTIFICATION] connected\n")
 		case mqtt.ConnectionNotificationConnecting:
-			fmt.Printf("[NOTIFICATION] connecting (isReconnect=%t) [%d]\n", n.IsReconnect, n.Attempt)
+			log.Printf("[NOTIFICATION] connecting (isReconnect=%t) [%d]\n", n.IsReconnect, n.Attempt)
 		case mqtt.ConnectionNotificationFailed:
-			fmt.Printf("[NOTIFICATION] connection failed: %v\n", n.Reason)
+			log.Printf("[NOTIFICATION] connection failed: %v\n", n.Reason)
 		case mqtt.ConnectionNotificationLost:
-			fmt.Printf("[NOTIFICATION] connection lost: %v\n", n.Reason)
+			log.Printf("[NOTIFICATION] connection lost: %v\n", n.Reason)
 		case mqtt.ConnectionNotificationBroker:
-			fmt.Printf("[NOTIFICATION] broker connection: %s\n", n.Broker.String())
+			log.Printf("[NOTIFICATION] broker connection: %s\n", n.Broker.String())
 		case mqtt.ConnectionNotificationBrokerFailed:
-			fmt.Printf("[NOTIFICATION] broker connection failed: %v [%s]\n", n.Reason, n.Broker.String())
+			log.Printf("[NOTIFICATION] broker connection failed: %v [%s]\n", n.Reason, n.Broker.String())
 		}
 	})
 
@@ -171,10 +190,12 @@ func main() {
 		}
 	}
 
-	c := mqtt.NewClient(opts)
+	c = mqtt.NewClient(opts)
 	if token := c.Connect(); token.Wait() && token.Error() != nil {
 		panic(token.Error())
 	}
+
+	go processCommands()
 
 	for {
 	}

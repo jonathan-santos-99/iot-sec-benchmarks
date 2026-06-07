@@ -27,7 +27,7 @@ def main():
             "-u", user,
             "-P", password
         ])
-        time.sleep(float(duration))
+        # time.sleep(float(duration))
 
 if __name__ == '__main__':
     main()
