@@ -51,3 +51,11 @@ benchmark_aes:
 				   -P $(MQTT_PASS)
 
 	@echo "Initiating benchmark for AES"
+
+benchmark_chacha20:
+	@mosquitto_pub -t $(MQTT_INBOUND_TOPIC) \
+				   -m '1;2;1'              \
+				   -u $(MQTT_USER)          \
+				   -P $(MQTT_PASS)
+
+	@echo "Initiating benchmark for ChaCha20"

@@ -7,7 +7,10 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log"
 	"strings"
+
+	"golang.org/x/crypto/chacha20"
 )
 
 type Algorithm int
@@ -15,6 +18,7 @@ type Algorithm int
 const (
 	PlainText Algorithm = iota
 	AES
+	ChaCha20
 )
 
 var Cyphers = make(map[Algorithm]cipher.Block)
@@ -26,6 +30,8 @@ func (a *Algorithm) UnmarshalText(text []byte) error {
 		*a = PlainText
 	case "AES":
 		*a = AES
+	case "CHACHA20":
+		*a = ChaCha20
 	default:
 		return fmt.Errorf("Could not parse %s as algorithm", text)
 	}
@@ -34,10 +40,10 @@ func (a *Algorithm) UnmarshalText(text []byte) error {
 }
 
 func (a Algorithm) String() string {
-	return [...]string{"PLAIN_TEXT", "AES"}[a]
+	return [...]string{"PLAIN_TEXT", "AES", "CHACHA20"}[a]
 }
 
-func Encrypt(algorithm Algorithm, plaintext []byte) ([]byte, error) {
+func Encrypt(algorithm Algorithm, key, plaintext []byte) ([]byte, error) {
 	var err error = nil
 	var data []byte
 	switch algorithm {
@@ -45,12 +51,14 @@ func Encrypt(algorithm Algorithm, plaintext []byte) ([]byte, error) {
 		data = plaintext
 	case AES:
 		data, err = encryptAES(plaintext)
+	case ChaCha20:
+		data, err = encryptChaCha20(plaintext, key)
 	}
 
 	return data, err
 }
 
-func Decrypt(algorithm Algorithm, ciphertext []byte) ([]byte, error) {
+func Decrypt(algorithm Algorithm, key, ciphertext []byte) ([]byte, error) {
 	var err error = nil
 	var data []byte
 	switch algorithm {
@@ -58,6 +66,8 @@ func Decrypt(algorithm Algorithm, ciphertext []byte) ([]byte, error) {
 		data = ciphertext
 	case AES:
 		data, err = decryptAES(ciphertext)
+	case ChaCha20:
+		data, err = decryptChaCha20(ciphertext, key)
 	}
 
 	return data, err
@@ -129,4 +139,40 @@ func decryptAES(ciphertext []byte) ([]byte, error) {
 	mode.CryptBlocks(plaintext, actualCiphertext)
 
 	return pkcs7Unpad(plaintext)
+}
+
+func encryptChaCha20(plaintext, key []byte) ([]byte, error) {
+	nonce := make([]byte, chacha20.NonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		log.Fatal(err)
+	}
+
+	cipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Encrypt plaintext into ciphertext buffer
+	ciphertext := make([]byte, len(plaintext))
+	cipher.XORKeyStream(ciphertext, plaintext)
+
+	return append(nonce, ciphertext...), nil
+}
+
+func decryptChaCha20(ciphertext, key []byte) ([]byte, error) {
+	// To decrypt, you must recreate the cipher with the exact same Key and Nonce
+	if len(ciphertext) <= chacha20.NonceSize {
+		return nil, fmt.Errorf("Invalid ciphertext size")
+	}
+	nonce := ciphertext[:chacha20.NonceSize]
+	ciphertext = ciphertext[chacha20.NonceSize:]
+	decipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Decrypt ciphertext back into original plaintext
+	decrypted := make([]byte, len(ciphertext))
+	decipher.XORKeyStream(decrypted, ciphertext)
+	return decrypted, nil
 }

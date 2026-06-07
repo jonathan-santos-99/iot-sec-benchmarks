@@ -6,5 +6,9 @@
     "AES": {
         "topic": "outbound/aes",
         "key": "passphrasewhichneedstobe32bytess"
+    },
+    "CHACHA20": {
+        "topic": "outbound/chacha20",
+        "key": "this-is-a-secret-32-byte-key-abc"
     }
 }

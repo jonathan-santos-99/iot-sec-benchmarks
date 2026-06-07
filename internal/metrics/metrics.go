@@ -198,7 +198,12 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 }
 
 func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, error) {
-	decrypted, err := ecryption.Decrypt(algorithm, raw)
+	topicInfo, ok := topics.OutboundTopics[algorithm]
+	if !ok {
+		return outboundMessage{}, fmt.Errorf("Could not found info about algorithm %s", algorithm.String())
+	}
+
+	decrypted, err := ecryption.Decrypt(algorithm, []byte(topicInfo.Key), raw)
 	if err != nil {
 		return outboundMessage{}, err
 	}

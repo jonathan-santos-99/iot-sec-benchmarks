@@ -74,7 +74,7 @@ func publish(c mqtt.Client, algorithm ecryption.Algorithm, data string) {
 		return
 	}
 
-	encrypted, err := ecryption.Encrypt(algorithm, []byte(data))
+	encrypted, err := ecryption.Encrypt(algorithm, []byte(topicInfo.Key), []byte(data))
 	if err != nil {
 		log.Printf("Could not encrypt data for algorithm %s: %s\n", algorithm.String(), err)
 		return
