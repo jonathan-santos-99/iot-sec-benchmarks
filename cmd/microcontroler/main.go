@@ -18,7 +18,7 @@ import (
 
 var (
 	inboudTopic  *string
-	commandQueue = make(chan Command, 1024) // buffered channel
+	commandQueue = make(chan Command, 1024)
 	c            mqtt.Client
 )
 
@@ -195,8 +195,5 @@ func main() {
 		panic(token.Error())
 	}
 
-	go processCommands()
-
-	for {
-	}
+	processCommands()
 }
