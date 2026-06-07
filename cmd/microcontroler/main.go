@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fishSim/internal/ecryption"
 	"fishSim/internal/topics"
 	"flag"
@@ -23,6 +24,7 @@ type Command struct {
 	id        int
 	algorithm ecryption.Algorithm
 	duration  time.Duration
+	checksum  int
 }
 
 type MsgType int
@@ -33,7 +35,7 @@ const (
 	Stop
 )
 
-const TOTAL_PARTS = 3
+const TOTAL_PARTS = 4
 
 func parseCmd(raw []byte) (Command, error) {
 	parts := strings.Split(string(raw), ";")
@@ -58,13 +60,19 @@ func parseCmd(raw []byte) (Command, error) {
 		parsedParts[0],
 		ecryption.Algorithm(parsedParts[1]),
 		time.Duration(parsedParts[2]),
+		parsedParts[3],
 	}, nil
 }
 
-func newMessage(cmdId int, msgType MsgType, data int) string {
+func newMessage(cmdId int, msgType MsgType, data, checksum int) string {
 	usec := time.Now().UnixNano()
-	message := fmt.Sprintf("%d;%d;%d;%d", cmdId, msgType, data, usec)
-	return message
+	payload := fmt.Sprintf("%d;%d;%d;%d", msgType, data, usec, checksum)
+	if checksum > 0 {
+		digest := sha256.Sum256([]byte(payload))
+		return fmt.Sprintf("%d;%x;%s", cmdId, digest, payload)
+	}
+
+	return fmt.Sprintf("%d;%s", cmdId, payload)
 }
 
 func publish(c mqtt.Client, algorithm ecryption.Algorithm, data string) {
@@ -81,7 +89,6 @@ func publish(c mqtt.Client, algorithm ecryption.Algorithm, data string) {
 	}
 
 	c.Publish(topicInfo.Topic, 0, false, encrypted)
-	// log.Printf("Sent: %s\n", data)
 }
 
 func onMessageReceived(c mqtt.Client, message mqtt.Message) {
@@ -92,7 +99,7 @@ func onMessageReceived(c mqtt.Client, message mqtt.Message) {
 		return
 	}
 
-	publish(c, cmd.algorithm, newMessage(cmd.id, Start, 0))
+	publish(c, cmd.algorithm, newMessage(cmd.id, Start, 0, cmd.checksum))
 	timeout := time.After(cmd.duration * time.Second)
 finish:
 	for {
@@ -101,11 +108,12 @@ finish:
 			break finish
 		default:
 			data := rand.IntN(100)
-			publish(c, cmd.algorithm, newMessage(cmd.id, Continue, data))
+			msg := newMessage(cmd.id, Continue, data, cmd.checksum)
+			publish(c, cmd.algorithm, msg)
 		}
 	}
 
-	publish(c, cmd.algorithm, newMessage(cmd.id, Stop, 0))
+	publish(c, cmd.algorithm, newMessage(cmd.id, Stop, 0, cmd.checksum))
 }
 
 func main() {

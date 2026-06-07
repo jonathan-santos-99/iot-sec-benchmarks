@@ -28,7 +28,6 @@ func main() {
 	mqttServer := flag.String("mqtt_server", "tcp://127.0.0.1:1883", "The full url of the MQTT server to connect to ex: tcp://127.0.0.1:1883")
 	mqttUsername := flag.String("mqtt_user", "", "A username to authenticate to the MQTT server")
 	mqttPassword := flag.String("mqtt_pass", "", "Password to match the MQTT username")
-	mqttInboundTopic := flag.String("mqtt_inbound_topic", "", "Inbound topic")
 	mqttOutboundConfigFile := flag.String("mqtt_outbound_config", "", "JSON file with information abount outbound topics")
 	flag.Parse()
 
@@ -37,7 +36,6 @@ func main() {
 		*mqttServer,
 		*mqttUsername,
 		*mqttPassword,
-		*mqttInboundTopic,
 		*mqttOutboundConfigFile,
 	)
 

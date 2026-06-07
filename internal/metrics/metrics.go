@@ -1,7 +1,10 @@
 package metrics
 
 import (
+	"bytes"
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"fishSim/internal/ecryption"
 	"fishSim/internal/topics"
 	"fmt"
@@ -25,6 +28,7 @@ type Metric struct {
 	algorithm ecryption.Algorithm
 	start     time.Time
 	end       *time.Time
+	checksum  bool
 	mu        sync.Mutex
 	reqs      []struct {
 		data      int
@@ -40,9 +44,10 @@ var db = struct {
 }
 
 type MetricsOutput struct {
-	Id   int    `json:"id"`
-	Reqs []int  `json:"requests_per_second"`
-	Type string `json:"type"`
+	Id       int    `json:"id"`
+	Reqs     []int  `json:"requests_per_second"`
+	Type     string `json:"type"`
+	Checksum bool   `json:"checksum"`
 }
 
 func (s *Service) GetMetrics() []MetricsOutput {
@@ -72,16 +77,17 @@ func (s *Service) GetMetrics() []MetricsOutput {
 		reqsPerSec = append(reqsPerSec, reqsCount)
 
 		out = append(out, MetricsOutput{
-			Id:   metric.id,
-			Type: metric.algorithm.String(),
-			Reqs: reqsPerSec,
+			Id:       metric.id,
+			Type:     metric.algorithm.String(),
+			Reqs:     reqsPerSec,
+			Checksum: metric.checksum,
 		})
 	}
 
 	return out
 }
 
-func NewService(server, username, password, inboundTopic, mqttOutboundConfigFile string) *Service {
+func NewService(server, username, password, mqttOutboundConfigFile string) *Service {
 	hostname, _ := os.Hostname()
 	clientid := "server-" + hostname + strconv.Itoa(time.Now().Second())
 	opts := mqtt.
@@ -144,6 +150,7 @@ type outboundMessage struct {
 	msgType   MsgType
 	data      int
 	timestamp int64
+	checksum  bool
 }
 
 func handleMessage(c mqtt.Client, message mqtt.Message) {
@@ -160,24 +167,28 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 		return
 	}
 
-	record, ok := db.data[parsedMessage.cmdId]
-	if !ok {
-		db.mu.Lock()
-		record = new(Metric)
-		record.algorithm = algorithm
-		record.id = parsedMessage.cmdId
-		db.data[parsedMessage.cmdId] = record
-		db.mu.Unlock()
-	}
-
-	record.mu.Lock()
-	defer record.mu.Unlock()
-
 	switch parsedMessage.msgType {
 	case Start:
-		log.Printf("Start gathering data of benchmark %d\n", parsedMessage.cmdId)
+		db.mu.Lock()
+		defer db.mu.Unlock()
+
+		record := new(Metric)
+		record.algorithm = algorithm
+		record.id = parsedMessage.cmdId
+		record.checksum = parsedMessage.checksum
 		record.start = time.Unix(0, parsedMessage.timestamp)
+		db.data[parsedMessage.cmdId] = record
+		log.Printf("Start gathering data of benchmark %d\n", parsedMessage.cmdId)
+
 	case Continue:
+		record := db.data[parsedMessage.cmdId]
+		record.mu.Lock()
+		defer record.mu.Unlock()
+		if record.end != nil {
+			log.Printf("Ignoring data because end benchmark already arrived")
+			return
+		}
+
 		record.reqs = append(record.reqs, struct {
 			data      int
 			timestamp int64
@@ -186,6 +197,10 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 			parsedMessage.timestamp,
 		})
 	case Stop:
+		record := db.data[parsedMessage.cmdId]
+		record.mu.Lock()
+		defer record.mu.Unlock()
+
 		log.Printf("Finish gathering data of benchmark %d\n", parsedMessage.cmdId)
 		record.end = new(time.Unix(0, parsedMessage.timestamp))
 		slices.SortFunc(record.reqs, func(a, b struct {
@@ -200,7 +215,8 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, error) {
 	topicInfo, ok := topics.OutboundTopics[algorithm]
 	if !ok {
-		return outboundMessage{}, fmt.Errorf("Could not found info about algorithm %s", algorithm.String())
+		return outboundMessage{},
+			fmt.Errorf("Could not found info about algorithm %s", algorithm.String())
 	}
 
 	decrypted, err := ecryption.Decrypt(algorithm, []byte(topicInfo.Key), raw)
@@ -210,8 +226,12 @@ func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, e
 
 	// log.Printf("Received: %s\n", decrypted)
 
-	const TOTAL_PARTS = 4
-	parts := strings.SplitN(string(decrypted), ";", TOTAL_PARTS)
+	const TOTAL_PARTS = 5
+	parts := strings.Split(string(decrypted), ";")
+	if len(parts) > TOTAL_PARTS {
+		return parseMessageWithDigest(parts)
+	}
+
 	if len(parts) < TOTAL_PARTS {
 		return outboundMessage{}, fmt.Errorf(
 			"Message has incompatible number of components. Expected: %d, actual: %d",
@@ -240,9 +260,73 @@ func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, e
 		return outboundMessage{}, err
 	}
 
+	checksum, err := strconv.Atoi(parts[4])
+	if err != nil {
+		return outboundMessage{}, err
+	}
+
 	message.cmdId = cmdId
 	message.msgType = MsgType(msgType)
 	message.data = data
 	message.timestamp = timestamp
+	message.checksum = checksum > 0
+	return message, nil
+}
+
+func parseMessageWithDigest(parts []string) (outboundMessage, error) {
+	const TOTAL_PARTS = 6
+	if len(parts) != TOTAL_PARTS {
+		return outboundMessage{}, fmt.Errorf(
+			"Message has incompatible number of components. Expected: %d, actual: %d",
+			TOTAL_PARTS, len(parts),
+		)
+	}
+
+	var message outboundMessage
+	cmdId, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return outboundMessage{}, err
+	}
+
+	msgType, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return outboundMessage{}, err
+	}
+
+	data, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return outboundMessage{}, err
+	}
+
+	timestamp, err := strconv.ParseInt(parts[4], 10, 64)
+	if err != nil {
+		return outboundMessage{}, err
+	}
+
+	checksum, err := strconv.Atoi(parts[5])
+	if err != nil {
+		return outboundMessage{}, err
+	}
+
+	sum, err := hex.DecodeString(parts[1])
+	if err != nil {
+		return outboundMessage{}, err
+	}
+
+	if len(sum) != 32 {
+		return outboundMessage{}, fmt.Errorf("Invalid hash length %d: %x", len(sum), sum)
+	}
+
+	payload := fmt.Sprintf("%d;%d;%d;%d", msgType, data, timestamp, checksum)
+	digest := sha256.Sum256([]byte(payload))
+	if !bytes.Equal(sum, digest[:]) {
+		return outboundMessage{}, fmt.Errorf("Hashes dont match!")
+	}
+
+	message.cmdId = cmdId
+	message.msgType = MsgType(msgType)
+	message.data = data
+	message.timestamp = timestamp
+	message.checksum = checksum > 0
 	return message, nil
 }

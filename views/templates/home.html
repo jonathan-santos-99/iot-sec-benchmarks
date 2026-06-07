@@ -8,50 +8,60 @@
     </div>
 </section>
 
+<section class="chart-panel">
+    <h2>Requests por segundo (Checksum)</h2>
+    <div class="chart-wrapper">
+        <canvas id="rpsChecksumChart"></canvas>
+    </div>
+</section>
+
 <script>
     (function renderRpsChart() {
         if (typeof Chart === 'undefined') {
             return setTimeout(renderRpsChart, 50);
         }
 
-        const canvas = document.getElementById('rpsChart');
-        if (!canvas) return;
+        const PALETTE = {
+            "PLAIN_TEXT" : { border : '#2563eb', bg : 'rgba( 37, 99, 235, 0.15)' },
+            "CHACHA20"   : { border : '#dc2626', bg : 'rgba(220, 38, 38, 0.15)'  },
+            "AES"        : { border : '#16a34a', bg : 'rgba( 22, 163, 74, 0.15)' },
+        };
 
-        const PALETTE = [
-            { border: '#2563eb', bg: 'rgba( 37,  99, 235, 0.15)' },
-            { border: '#dc2626', bg: 'rgba(220,  38,  38, 0.15)' },
-            { border: '#16a34a', bg: 'rgba( 22, 163,  74, 0.15)' },
-            { border: '#9333ea', bg: 'rgba(147,  51, 234, 0.15)' },
-            { border: '#ea580c', bg: 'rgba(234,  88,  12, 0.15)' },
-        ];
+        const rpsChart         = createChart('rpsChart');
+        const rpsChecksumChart = createChart('rpsChecksumChart');
 
-        const chart = new Chart(canvas.getContext('2d'), {
-            type: 'line',
-            data: { labels: [], datasets: [] },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { position: 'bottom' },
-                    title: { display: false },
-                },
-                scales: {
-                    x: { title: { display: true, text: 'Tempo' } },
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'Requests' },
+        function createChart(clazz) {
+            const canvas = document.getElementById(clazz);
+            if (!canvas) return;
+
+            return new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { labels: [], datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        title: { display: false },
+                    },
+                    scales: {
+                        x: { title: { display: true, text: 'Tempo' } },
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Requests' },
+                        },
                     },
                 },
-            },
-        });
+            });
+        }
 
-        function datasetFor(type, index) {
+        function datasetFor(chart, type, index) {
             let ds = chart.data.datasets.find((d) => d.label === type);
             if (ds) return ds;
 
-            const color = PALETTE[index % PALETTE.length];
+            const color = PALETTE[type];
             ds = {
                 label: type,
                 data: [],
@@ -64,15 +74,14 @@
             return ds;
         }
 
-        function applyMetrics(payload) {
-            const series = payload.data
+        function applyMetrics(series, chart) {
             if (series.length === 0) return;
 
             const maxLen = series.reduce((acc, s) => Math.max(acc, s.requests_per_second.length), 0);
             chart.data.labels = Array.from({ length: maxLen }, (_, i) => `${i + 1}s`);
 
             series.forEach((entry, i) => {
-                const ds = datasetFor(entry.type || `serie-${i}`, i);
+                const ds = datasetFor(chart, entry.type || `serie-${i}`, i);
                 ds.data = entry.requests_per_second || [];
             });
 
@@ -87,7 +96,11 @@
                 }
 
                 const payload = await res.json();
-                applyMetrics(payload);
+
+                const justEncrypt  = payload.data.filter(r => !r.checksum);
+                const withCheckSum = payload.data.filter(r => r.checksum);
+                applyMetrics(justEncrypt , rpsChart);
+                applyMetrics(withCheckSum, rpsChecksumChart);
             } catch (err) {
                 console.error('Falha ao buscar /metrics:', err);
             }
