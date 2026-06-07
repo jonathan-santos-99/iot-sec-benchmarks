@@ -81,7 +81,7 @@ func publish(c mqtt.Client, algorithm ecryption.Algorithm, data string) {
 	}
 
 	c.Publish(topicInfo.Topic, 0, false, encrypted)
-	log.Printf("Sent: %s\n", data)
+	// log.Printf("Sent: %s\n", data)
 }
 
 func onMessageReceived(c mqtt.Client, message mqtt.Message) {

@@ -164,7 +164,7 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 	if !ok {
 		db.mu.Lock()
 		record = new(Metric)
-		record.algorithm = ecryption.PlainText
+		record.algorithm = algorithm
 		record.id = parsedMessage.cmdId
 		db.data[parsedMessage.cmdId] = record
 		db.mu.Unlock()
@@ -208,7 +208,7 @@ func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, e
 		return outboundMessage{}, err
 	}
 
-	log.Printf("Received: %s\n", decrypted)
+	// log.Printf("Received: %s\n", decrypted)
 
 	const TOTAL_PARTS = 4
 	parts := strings.SplitN(string(decrypted), ";", TOTAL_PARTS)

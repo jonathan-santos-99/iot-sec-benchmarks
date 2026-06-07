@@ -36,9 +36,11 @@ setup_moquistto:
 	 								       $(MQTT_USER)      \
 	 									   $(MQTT_PASS)
 
+benchmark: benchmark_plaintext benchmark_aes benchmark_chacha20
+
 benchmark_plaintext:
 	@mosquitto_pub -t $(MQTT_INBOUND_TOPIC) \
-				   -m '1;0;1'              \
+				   -m '1;0;10'              \
 				   -u $(MQTT_USER)          \
 				   -P $(MQTT_PASS)
 
@@ -46,7 +48,7 @@ benchmark_plaintext:
 
 benchmark_aes:
 	@mosquitto_pub -t $(MQTT_INBOUND_TOPIC) \
-				   -m '1;1;1'              \
+				   -m '2;1;10'              \
 				   -u $(MQTT_USER)          \
 				   -P $(MQTT_PASS)
 
@@ -54,7 +56,7 @@ benchmark_aes:
 
 benchmark_chacha20:
 	@mosquitto_pub -t $(MQTT_INBOUND_TOPIC) \
-				   -m '1;2;1'              \
+				   -m '3;2;10'              \
 				   -u $(MQTT_USER)          \
 				   -P $(MQTT_PASS)
 
