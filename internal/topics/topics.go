@@ -1,39 +1,14 @@
 package topics
 
 import (
+	"crypto/aes"
 	"encoding/json"
-	"fmt"
+	"fishSim/internal/ecryption"
 	"log"
 	"os"
-	"strings"
 )
 
-type Algorithm int
-
-const (
-	PlainText Algorithm = iota
-	AES
-)
-
-func (a *Algorithm) UnmarshalText(text []byte) error {
-	name := string(text)
-	switch strings.ToUpper(name) {
-	case "PLAIN_TEXT":
-		*a = PlainText
-	case "AES":
-		*a = AES
-	default:
-		return fmt.Errorf("Could not parse %s as algorithm", text)
-	}
-
-	return nil
-}
-
-func (a Algorithm) String() string {
-	return [...]string{"PLAIN_TEXT", "AES"}[a]
-}
-
-var OutboundTopics = make(map[Algorithm]struct {
+var OutboundTopics = make(map[ecryption.Algorithm]struct {
 	Topic string
 	Key   string
 })
@@ -48,14 +23,28 @@ func ParseConfigFile(file string) {
 	if err != nil {
 		log.Fatalf("Error opening %s: %s", file, err)
 	}
+
+	for alg, inf := range OutboundTopics {
+		switch alg {
+		case ecryption.AES:
+			{
+				block, err := aes.NewCipher([]byte(inf.Key))
+				if err != nil {
+					log.Panicf("Error creating AES block cypher: %s\n", err)
+				}
+
+				ecryption.Cyphers[ecryption.AES] = block
+			}
+		}
+	}
 }
 
-func FindAlgorithm(topic string) (Algorithm, bool) {
+func FindAlgorithm(topic string) (ecryption.Algorithm, bool) {
 	for algo, topicInfo := range OutboundTopics {
 		if topicInfo.Topic == topic {
 			return algo, true
 		}
 	}
 
-	return Algorithm(0), false
+	return ecryption.Algorithm(0), false
 }

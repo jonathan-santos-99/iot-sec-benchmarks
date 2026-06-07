@@ -38,7 +38,7 @@ setup_moquistto:
 
 benchmark_plaintext:
 	@mosquitto_pub -t $(MQTT_INBOUND_TOPIC) \
-				   -m '1;0;10'              \
+				   -m '1;0;1'              \
 				   -u $(MQTT_USER)          \
 				   -P $(MQTT_PASS)
 
@@ -46,7 +46,7 @@ benchmark_plaintext:
 
 benchmark_aes:
 	@mosquitto_pub -t $(MQTT_INBOUND_TOPIC) \
-				   -m '1;1;10'              \
+				   -m '1;1;1'              \
 				   -u $(MQTT_USER)          \
 				   -P $(MQTT_PASS)
 

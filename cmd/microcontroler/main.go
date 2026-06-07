@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fishSim/internal/ecryption"
 	"fishSim/internal/topics"
 	"flag"
 	"fmt"
@@ -20,7 +21,7 @@ var (
 
 type Command struct {
 	id        int
-	algorithm topics.Algorithm
+	algorithm ecryption.Algorithm
 	duration  time.Duration
 }
 
@@ -55,7 +56,7 @@ func parseCmd(raw []byte) (Command, error) {
 
 	return Command{
 		parsedParts[0],
-		topics.Algorithm(parsedParts[1]),
+		ecryption.Algorithm(parsedParts[1]),
 		time.Duration(parsedParts[2]),
 	}, nil
 }
@@ -66,22 +67,21 @@ func newMessage(cmdId int, msgType MsgType, data int) string {
 	return message
 }
 
-func publish(c mqtt.Client, algorithm topics.Algorithm, data string) {
-	var encrypted string
-	switch algorithm {
-	case topics.PlainText:
-		encrypted = data
-	case topics.AES:
-
-	}
-
+func publish(c mqtt.Client, algorithm ecryption.Algorithm, data string) {
 	topicInfo, ok := topics.OutboundTopics[algorithm]
 	if !ok {
 		log.Printf("Could not find topic for algorithm %d\n", algorithm)
 		return
 	}
 
+	encrypted, err := ecryption.Encrypt(algorithm, []byte(data))
+	if err != nil {
+		log.Printf("Could not encrypt data for algorithm %s: %s\n", algorithm.String(), err)
+		return
+	}
+
 	c.Publish(topicInfo.Topic, 0, false, encrypted)
+	log.Printf("Sent: %s\n", data)
 }
 
 func onMessageReceived(c mqtt.Client, message mqtt.Message) {

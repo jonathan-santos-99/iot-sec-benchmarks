@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"cmp"
+	"fishSim/internal/ecryption"
 	"fishSim/internal/topics"
 	"fmt"
 	"log"
@@ -21,7 +22,7 @@ type Service struct {
 
 type Metric struct {
 	id        int
-	algorithm topics.Algorithm
+	algorithm ecryption.Algorithm
 	start     time.Time
 	end       *time.Time
 	mu        sync.Mutex
@@ -163,7 +164,7 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 	if !ok {
 		db.mu.Lock()
 		record = new(Metric)
-		record.algorithm = topics.PlainText
+		record.algorithm = ecryption.PlainText
 		record.id = parsedMessage.cmdId
 		db.data[parsedMessage.cmdId] = record
 		db.mu.Unlock()
@@ -196,13 +197,13 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 	}
 }
 
-func parseMessage(algorithm topics.Algorithm, raw []byte) (outboundMessage, error) {
-	var decrypted []byte
-	switch algorithm {
-	case topics.PlainText:
-		decrypted = raw
-	case topics.AES:
+func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, error) {
+	decrypted, err := ecryption.Decrypt(algorithm, raw)
+	if err != nil {
+		return outboundMessage{}, err
 	}
+
+	log.Printf("Received: %s\n", decrypted)
 
 	const TOTAL_PARTS = 4
 	parts := strings.SplitN(string(decrypted), ";", TOTAL_PARTS)
