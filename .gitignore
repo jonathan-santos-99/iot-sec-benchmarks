@@ -5,3 +5,5 @@ data/pwfile
 mosquitto/config/pwfile
 mosquitto/data/*
 mosquitto/log/*
+mosquitto/certs/*
+certs/*

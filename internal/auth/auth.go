@@ -30,7 +30,7 @@ func (s *Service) CreateSessionCookie(username, password string) (string, bool) 
 		return "", false
 	}
 
-	actually_user_password, found := userdata[username]
+	actualuserpassword, found := userdata[username]
 	if !found {
 		log.Printf("User %s not found\n", username)
 		return "", false
@@ -38,7 +38,7 @@ func (s *Service) CreateSessionCookie(username, password string) (string, bool) 
 
 	digest := sha256.Sum256([]byte(password))
 
-	if actually_user_password != hex.EncodeToString(digest[:]) {
+	if actualuserpassword != hex.EncodeToString(digest[:]) {
 		log.Printf("Invalid password for user %s\n", username)
 		return "", false
 	}

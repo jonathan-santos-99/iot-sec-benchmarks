@@ -5,11 +5,13 @@ services:
     container_name: mqtt5
     ports:
       - "1883:1883"
+      - "8883:8883"  # MQTT over TLS
     volumes:
       - ./mosquitto/config:/mosquitto/config:rw
+      - ./mosquitto/certs:/mosquitto/certs:rw
       - ./mosquitto/data:/mosquitto/data:rw
       - ./mosquitto/log:/mosquitto/log:rw
-    restart: unless-stopped
+    restart: no
 
 volumes:
   config:

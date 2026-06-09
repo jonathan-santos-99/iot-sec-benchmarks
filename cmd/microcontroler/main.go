@@ -1,13 +1,13 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"fishSim/internal/ecryption"
 	"fishSim/internal/topics"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand/v2"
 	"os"
 	"strconv"
 	"strings"
@@ -18,8 +18,10 @@ import (
 
 var (
 	inboudTopic  *string
-	commandQueue = make(chan Command, 1024)
-	c            mqtt.Client
+	commandQueue = make(chan struct {
+		cmd Command
+		c   mqtt.Client
+	}, 1024)
 )
 
 type Command struct {
@@ -66,9 +68,9 @@ func parseCmd(raw []byte) (Command, error) {
 	}, nil
 }
 
-func newMessage(cmdId int, msgType MsgType, data, checksum int) string {
+func newMessage(cmdId int, msgType MsgType, data []byte, checksum int) string {
 	usec := time.Now().UnixNano()
-	payload := fmt.Sprintf("%d;%d;%d;%d", msgType, data, usec, checksum)
+	payload := fmt.Sprintf("%d;%x;%d;%d", msgType, data, usec, checksum)
 	if checksum > 0 {
 		digest := sha256.Sum256([]byte(payload))
 		return fmt.Sprintf("%d;%x;%s", cmdId, digest, payload)
@@ -90,7 +92,13 @@ func publish(c mqtt.Client, algorithm ecryption.Algorithm, data string) {
 		return
 	}
 
-	c.Publish(topicInfo.Topic, 0, false, encrypted)
+	sendTo := topicInfo.Topic
+	opts := c.OptionsReader()
+	if opts.TLSConfig() != nil {
+		sendTo = "tls/" + sendTo
+	}
+
+	c.Publish(sendTo, 0, false, encrypted)
 }
 
 func onMessageReceived(c mqtt.Client, message mqtt.Message) {
@@ -103,95 +111,93 @@ func onMessageReceived(c mqtt.Client, message mqtt.Message) {
 
 	// Non-blocking send to queue
 	select {
-	case commandQueue <- cmd:
+	case commandQueue <- struct {
+		cmd Command
+		c   mqtt.Client
+	}{cmd, c}:
 		log.Printf("Command queued: %d\n", cmd.id)
 	default:
 		log.Printf("Command queue full, dropping command: %d\n", cmd.id)
 	}
 }
 
+func mockdata() []byte {
+	data := make([]byte, 1024)
+	_, err := rand.Read(data)
+	if err != nil {
+		panic(err)
+	}
+
+	return data
+}
+
 func processCommands() {
-	for cmd := range commandQueue {
-		publish(c, cmd.algorithm, newMessage(cmd.id, Start, 0, cmd.checksum))
-		timeout := time.After(cmd.duration * time.Second)
+	for q := range commandQueue {
+		publish(q.c, q.cmd.algorithm, newMessage(q.cmd.id, Start, mockdata(), q.cmd.checksum))
+		timeout := time.After(q.cmd.duration * time.Second)
 	finish:
 		for {
 			select {
 			case <-timeout:
 				break finish
 			default:
-				data := rand.IntN(100)
-				msg := newMessage(cmd.id, Continue, data, cmd.checksum)
-				publish(c, cmd.algorithm, msg)
+
+				msg := newMessage(q.cmd.id, Continue, mockdata(), q.cmd.checksum)
+				publish(q.c, q.cmd.algorithm, msg)
 			}
 		}
 
-		publish(c, cmd.algorithm, newMessage(cmd.id, Stop, 0, cmd.checksum))
-		log.Printf("Finished command: %d\n", cmd.id)
+		publish(q.c, q.cmd.algorithm, newMessage(q.cmd.id, Stop, mockdata(), q.cmd.checksum))
+		log.Printf("Finished command: %d\n", q.cmd.id)
 	}
 }
 
 func main() {
+	// mqtt.DEBUG = log.New(os.Stdout, "[DEBUG] ", 0)
 	mqtt.ERROR = log.New(os.Stdout, "[ERROR] ", 0)
 	mqtt.CRITICAL = log.New(os.Stdout, "[CRIT] ", 0)
 	mqtt.WARN = log.New(os.Stdout, "[WARN]  ", 0)
 
-	server := flag.String(
-		"mqtt_server",
-		"tcp://127.0.0.1:1883", "The full url of the MQTT server to connect")
+	server := flag.String("mqtt_server", "127.0.0.1",
+		"The full url of the MQTT server to connect")
 	username := flag.String("mqtt_user", "", "A username to authenticate to the MQTT server")
 	password := flag.String("mqtt_pass", "", "Password to match the MQTT username")
+	cafile := flag.String("mqtt_ca_file", "", "TLS: Path to CA CRT file")
+	clientCrt := flag.String("mqtt_crt_file", "", "TLS: Path to CRT file")
+	clientKey := flag.String("mqtt_key_file", "", "TLS: Path to KEY file")
+
 	inboudTopic = flag.String("mqtt_inbound_topic", "",
 		"Inbound topic (where the commands are received)")
-
-	mqttOutboundConfigFile := flag.String("mqtt_outbound_config", "", "JSON file with information abount outbound topics")
+	mqttOutboundConfigFile := flag.String("mqtt_outbound_config", "",
+		"JSON file with information abount outbound topics")
 
 	flag.Parse()
-
 	topics.ParseConfigFile(*mqttOutboundConfigFile)
 
-	hostname, _ := os.Hostname()
-	clientid := "mock-microcontroler-" + hostname + strconv.Itoa(time.Now().Second())
-	opts := mqtt.
-		NewClientOptions().
-		AddBroker(*server).
-		SetClientID(clientid).
-		SetCleanSession(true).
-		SetKeepAlive(2 * time.Second).
-		SetPingTimeout(1 * time.Second)
+	c := topics.StartClient(
+		*server,
+		*username,
+		*password,
+		topics.ClientId("mock-microcontroler-"),
+	)
 
-	if *username != "" {
-		opts.SetUsername(*username)
-		if *password != "" {
-			opts.SetPassword(*password)
-		}
+	token := c.Subscribe(*inboudTopic, 0, onMessageReceived)
+	if token.Wait() && token.Error() != nil {
+		panic(token.Error())
 	}
 
-	opts.SetConnectionNotificationHandler(func(client mqtt.Client, notification mqtt.ConnectionNotification) {
-		switch n := notification.(type) {
-		case mqtt.ConnectionNotificationConnected:
-			log.Printf("[NOTIFICATION] connected\n")
-		case mqtt.ConnectionNotificationConnecting:
-			log.Printf("[NOTIFICATION] connecting (isReconnect=%t) [%d]\n", n.IsReconnect, n.Attempt)
-		case mqtt.ConnectionNotificationFailed:
-			log.Printf("[NOTIFICATION] connection failed: %v\n", n.Reason)
-		case mqtt.ConnectionNotificationLost:
-			log.Printf("[NOTIFICATION] connection lost: %v\n", n.Reason)
-		case mqtt.ConnectionNotificationBroker:
-			log.Printf("[NOTIFICATION] broker connection: %s\n", n.Broker.String())
-		case mqtt.ConnectionNotificationBrokerFailed:
-			log.Printf("[NOTIFICATION] broker connection failed: %v [%s]\n", n.Reason, n.Broker.String())
-		}
-	})
+	c = topics.StartTLSClient(
+		*cafile,
+		*clientCrt,
+		*clientKey,
+		*server,
+		*username,
+		*password,
+		topics.ClientId("mock-microcontroler-tls"),
+	)
 
-	opts.OnConnect = func(c mqtt.Client) {
-		if token := c.Subscribe(*inboudTopic, 0, onMessageReceived); token.Wait() && token.Error() != nil {
-			panic(token.Error())
-		}
-	}
-
-	c = mqtt.NewClient(opts)
-	if token := c.Connect(); token.Wait() && token.Error() != nil {
+	token = c.Subscribe("tls/"+*inboudTopic, 0, onMessageReceived)
+	if token.Wait() && token.Error() != nil {
 		panic(token.Error())
 	}
 

@@ -1,18 +1,31 @@
 include .env
 
-MQTT_INBOUND_TOPIC=inbound
-MQTT_OUTBOUND_CONFIG=./outbound.json
+MQTT_SERVER          := 127.0.0.1
+MQTT_INBOUND_TOPIC   := inbound
+MQTT_OUTBOUND_CONFIG := ./outbound.json
+
+MQTT_CA_FILE           := ./certs/rootCA-crt.pem
+MQTT_SENSOR_CRT_FILE   := ./certs/sensor-001-crt.pem
+MQTT_SENSOR_KEY_FILE   := ./certs/sensor-001-key.pem
+MQTT_BANCKEND_CRT_FILE := ./certs/backend-crt.pem
+MQTT_BANCKEND_KEY_FILE := ./certs/backend-key.pem
+
+BENCHMARK_DURATION_SECS := 4
 
 build:
 	go build -o bin/fishSim ./cmd/api
 
 run: build
 	@echo "Running API..."
-	@./bin/fishSim -pwfile data/pwfile 	 					    \
-				   -mqtt_server          $(MQTT_SERVER)         \
-				   -mqtt_user            $(MQTT_USER)           \
-				   -mqtt_pass            $(MQTT_PASS)           \
-				   -mqtt_outbound_config $(MQTT_OUTBOUND_CONFIG)
+	@./bin/fishSim -pwfile data/pwfile 	 					       \
+				   -mqtt_server          $(MQTT_SERVER)            \
+				   -mqtt_user            $(MQTT_USER)              \
+				   -mqtt_pass            $(MQTT_PASS)              \
+				   -mqtt_outbound_config $(MQTT_OUTBOUND_CONFIG)   \
+				   -mqtt_ca_file         $(MQTT_CA_FILE)           \
+                   -mqtt_crt_file        $(MQTT_BANCKEND_CRT_FILE) \
+                   -mqtt_key_file        $(MQTT_BANCKEND_KEY_FILE)
+
 
 
 add_user: data/add_user.py
@@ -20,12 +33,14 @@ add_user: data/add_user.py
 
 mock_mic:
 	@echo "Setting up fake microcontroler"
-	@go run ./cmd/microcontroler -mqtt_server          $(MQTT_SERVER)         \
-								 -mqtt_user            $(MQTT_USER)           \
-	 							 -mqtt_pass            $(MQTT_PASS)           \
-								 -mqtt_inbound_topic   $(MQTT_INBOUND_TOPIC)  \
-                				 -mqtt_outbound_config $(MQTT_OUTBOUND_CONFIG)
-
+	@go run ./cmd/microcontroler -mqtt_server          $(MQTT_SERVER)          \
+								 -mqtt_user            $(MQTT_USER)            \
+	 							 -mqtt_pass            $(MQTT_PASS)            \
+								 -mqtt_inbound_topic   $(MQTT_INBOUND_TOPIC)   \
+                				 -mqtt_outbound_config $(MQTT_OUTBOUND_CONFIG) \
+								 -mqtt_ca_file         $(MQTT_CA_FILE)         \
+                                 -mqtt_crt_file        $(MQTT_SENSOR_CRT_FILE) \
+                                 -mqtt_key_file        $(MQTT_SENSOR_KEY_FILE)
 
 setup_moquistto:
 	@echo "setting up mosquitto container"
@@ -35,7 +50,9 @@ setup_moquistto:
 	 								       $(MQTT_USER)      \
 	 									   $(MQTT_PASS)
 
-DURATION_SECS := 10
-
-benchmark: benchmark_starter.py
-	@python3 benchmark_starter.py $(MQTT_INBOUND_TOPIC) $(DURATION_SECS) $(MQTT_USER) $(MQTT_PASS)
+benchmark: ./scripts/benchmark_starter.py
+	@python3 ./scripts/benchmark_starter.py $(MQTT_INBOUND_TOPIC)      \
+											$(BENCHMARK_DURATION_SECS) \
+											$(MQTT_USER)               \
+											$(MQTT_PASS)               \
+											$(MQTT_CA_FILE)

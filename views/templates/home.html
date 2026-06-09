@@ -15,6 +15,20 @@
     </div>
 </section>
 
+<section class="chart-panel">
+    <h2>Requests por segundo (TLS)</h2>
+    <div class="chart-wrapper">
+        <canvas id="rpsTLSChart"></canvas>
+    </div>
+</section>
+
+<section class="chart-panel">
+    <h2>Requests por segundo (Checksum+TLS)</h2>
+    <div class="chart-wrapper">
+        <canvas id="rpsAllChart"></canvas>
+    </div>
+</section>
+
 <script>
     (function renderRpsChart() {
         if (typeof Chart === 'undefined') {
@@ -26,9 +40,6 @@
             "CHACHA20"   : { border : '#dc2626', bg : 'rgba(220, 38, 38, 0.15)'  },
             "AES"        : { border : '#16a34a', bg : 'rgba( 22, 163, 74, 0.15)' },
         };
-
-        const rpsChart         = createChart('rpsChart');
-        const rpsChecksumChart = createChart('rpsChecksumChart');
 
         function createChart(clazz) {
             const canvas = document.getElementById(clazz);
@@ -88,6 +99,11 @@
             chart.update('none');
         }
 
+        const rpsAllChart       = createChart('rpsAllChart');
+        const rpsTlsChart       = createChart('rpsTLSChart');
+        const rpsChecksumChart  = createChart('rpsChecksumChart');
+        const rpsChart          = createChart('rpsChart');
+
         async function fetchMetrics() {
             try {
                 const res = await fetch('/metrics', { headers: { 'Accept': 'application/json' } });
@@ -97,10 +113,14 @@
 
                 const payload = await res.json();
 
-                const justEncrypt  = payload.data.filter(r => !r.checksum);
-                const withCheckSum = payload.data.filter(r => r.checksum);
-                applyMetrics(justEncrypt , rpsChart);
-                applyMetrics(withCheckSum, rpsChecksumChart);
+                const all      = payload.data.filter(r =>  r.checksum &&  r.tls);
+                const tls      = payload.data.filter(r => !r.checksum &&  r.tls);
+                const checkSum = payload.data.filter(r =>  r.checksum && !r.tls);
+                const encrypt  = payload.data.filter(r => !r.checksum && !r.tls);
+                applyMetrics(all      , rpsAllChart);
+                applyMetrics(tls      , rpsTlsChart);
+                applyMetrics(checkSum , rpsChecksumChart);
+                applyMetrics(encrypt  , rpsChart);
             } catch (err) {
                 console.error('Falha ao buscar /metrics:', err);
             }

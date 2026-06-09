@@ -2,14 +2,12 @@ package metrics
 
 import (
 	"bytes"
-	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"fishSim/internal/ecryption"
 	"fishSim/internal/topics"
 	"fmt"
 	"log"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,21 +17,15 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-type Service struct {
-	client mqtt.Client
-}
-
 type Metric struct {
 	id        int
 	algorithm ecryption.Algorithm
 	start     time.Time
 	end       *time.Time
-	checksum  bool
 	mu        sync.Mutex
-	reqs      []struct {
-		data      int
-		timestamp int64
-	}
+	checksum  bool
+	tls       bool
+	reqs      []int64
 }
 
 var db = struct {
@@ -48,9 +40,10 @@ type MetricsOutput struct {
 	Reqs     []int  `json:"requests_per_second"`
 	Type     string `json:"type"`
 	Checksum bool   `json:"checksum"`
+	TLS      bool   `json:"tls"`
 }
 
-func (s *Service) GetMetrics() []MetricsOutput {
+func GetMetrics() []MetricsOutput {
 	out := make([]MetricsOutput, 0)
 	for _, metric := range db.data {
 		if len(metric.reqs) <= 0 {
@@ -59,10 +52,10 @@ func (s *Service) GetMetrics() []MetricsOutput {
 
 		var reqsPerSec []int
 		reqsCount := 1
-		lastReqTimestamp := metric.reqs[0].timestamp
+		lastReqTimestamp := metric.reqs[0]
 		var accDuration int64 = 0
-		for _, req := range metric.reqs[1:] {
-			accDuration += (req.timestamp - lastReqTimestamp)
+		for _, timestamp := range metric.reqs[1:] {
+			accDuration += (timestamp - lastReqTimestamp)
 			if time.Duration(accDuration) >= 1*time.Second {
 				reqsPerSec = append(reqsPerSec, reqsCount)
 				accDuration = 0
@@ -71,7 +64,7 @@ func (s *Service) GetMetrics() []MetricsOutput {
 				reqsCount += 1
 			}
 
-			lastReqTimestamp = req.timestamp
+			lastReqTimestamp = timestamp
 		}
 
 		reqsPerSec = append(reqsPerSec, reqsCount)
@@ -81,60 +74,11 @@ func (s *Service) GetMetrics() []MetricsOutput {
 			Type:     metric.algorithm.String(),
 			Reqs:     reqsPerSec,
 			Checksum: metric.checksum,
+			TLS:      metric.tls,
 		})
 	}
 
 	return out
-}
-
-func NewService(server, username, password, mqttOutboundConfigFile string) *Service {
-	hostname, _ := os.Hostname()
-	clientid := "server-" + hostname + strconv.Itoa(time.Now().Second())
-	opts := mqtt.
-		NewClientOptions().
-		AddBroker(server).
-		SetClientID(clientid).
-		SetCleanSession(true).
-		SetUsername(username).
-		SetPassword(password).
-		SetKeepAlive(2 * time.Second).
-		SetPingTimeout(1 * time.Second).
-		SetConnectionNotificationHandler(func(client mqtt.Client, n mqtt.ConnectionNotification) {
-			switch ntype := n.(type) {
-			case mqtt.ConnectionNotificationConnected:
-				fmt.Printf("[NOTIFICATION] connected\n")
-			case mqtt.ConnectionNotificationConnecting:
-				fmt.Printf("[NOTIFICATION] connecting (isReconnect=%t) [%d]\n",
-					ntype.IsReconnect, ntype.Attempt)
-			case mqtt.ConnectionNotificationFailed:
-				fmt.Printf("[NOTIFICATION] connection failed: %v\n", ntype.Reason)
-			case mqtt.ConnectionNotificationLost:
-				fmt.Printf("[NOTIFICATION] connection lost: %v\n", ntype.Reason)
-			case mqtt.ConnectionNotificationBroker:
-				fmt.Printf("[NOTIFICATION] broker connection: %s\n", ntype.Broker.String())
-			case mqtt.ConnectionNotificationBrokerFailed:
-				fmt.Printf("[NOTIFICATION] broker connection failed: %v [%s]\n",
-					ntype.Reason, ntype.Broker.String())
-			}
-		})
-
-	topics.ParseConfigFile(mqttOutboundConfigFile)
-
-	opts.OnConnect = func(c mqtt.Client) {
-		for _, topicInfo := range topics.OutboundTopics {
-			token := c.Subscribe(topicInfo.Topic, 0, handleMessage)
-			if token.Wait() && token.Error() != nil {
-				panic(token.Error())
-			}
-		}
-	}
-
-	c := mqtt.NewClient(opts)
-	if token := c.Connect(); token.Wait() && token.Error() != nil {
-		panic(token.Error())
-	}
-
-	return &Service{client: c}
 }
 
 type MsgType int
@@ -148,13 +92,14 @@ const (
 type outboundMessage struct {
 	cmdId     int
 	msgType   MsgType
-	data      int
 	timestamp int64
 	checksum  bool
 }
 
-func handleMessage(c mqtt.Client, message mqtt.Message) {
-	algorithm, ok := topics.FindAlgorithm(message.Topic())
+func HandleMessage(c mqtt.Client, message mqtt.Message) {
+	topic, tls := strings.CutPrefix(message.Topic(), "tls/")
+
+	algorithm, ok := topics.FindAlgorithm(topic)
 	if !ok {
 		log.Printf("Could not find config for topic '%s'", message.Topic())
 		return
@@ -177,6 +122,7 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 		record.id = parsedMessage.cmdId
 		record.checksum = parsedMessage.checksum
 		record.start = time.Unix(0, parsedMessage.timestamp)
+		record.tls = tls
 		db.data[parsedMessage.cmdId] = record
 		log.Printf("Start gathering data of benchmark %d\n", parsedMessage.cmdId)
 
@@ -189,13 +135,7 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 			return
 		}
 
-		record.reqs = append(record.reqs, struct {
-			data      int
-			timestamp int64
-		}{
-			parsedMessage.data,
-			parsedMessage.timestamp,
-		})
+		record.reqs = append(record.reqs, parsedMessage.timestamp)
 	case Stop:
 		record := db.data[parsedMessage.cmdId]
 		record.mu.Lock()
@@ -203,12 +143,7 @@ func handleMessage(c mqtt.Client, message mqtt.Message) {
 
 		log.Printf("Finish gathering data of benchmark %d\n", parsedMessage.cmdId)
 		record.end = new(time.Unix(0, parsedMessage.timestamp))
-		slices.SortFunc(record.reqs, func(a, b struct {
-			data      int
-			timestamp int64
-		}) int {
-			return cmp.Compare(a.timestamp, b.timestamp)
-		})
+		slices.Sort(record.reqs)
 	}
 }
 
@@ -250,11 +185,6 @@ func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, e
 		return outboundMessage{}, err
 	}
 
-	data, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return outboundMessage{}, err
-	}
-
 	timestamp, err := strconv.ParseInt(parts[3], 10, 64)
 	if err != nil {
 		return outboundMessage{}, err
@@ -267,7 +197,6 @@ func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, e
 
 	message.cmdId = cmdId
 	message.msgType = MsgType(msgType)
-	message.data = data
 	message.timestamp = timestamp
 	message.checksum = checksum > 0
 	return message, nil
@@ -293,10 +222,10 @@ func parseMessageWithDigest(parts []string) (outboundMessage, error) {
 		return outboundMessage{}, err
 	}
 
-	data, err := strconv.Atoi(parts[3])
-	if err != nil {
-		return outboundMessage{}, err
-	}
+	// data, err :=
+	// if err != nil {
+	// 	return outboundMessage{}, err
+	// }
 
 	timestamp, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
@@ -317,7 +246,7 @@ func parseMessageWithDigest(parts []string) (outboundMessage, error) {
 		return outboundMessage{}, fmt.Errorf("Invalid hash length %d: %x", len(sum), sum)
 	}
 
-	payload := fmt.Sprintf("%d;%d;%d;%d", msgType, data, timestamp, checksum)
+	payload := fmt.Sprintf("%d;%s;%d;%d", msgType, parts[3], timestamp, checksum)
 	digest := sha256.Sum256([]byte(payload))
 	if !bytes.Equal(sum, digest[:]) {
 		return outboundMessage{}, fmt.Errorf("Hashes dont match!")
@@ -325,7 +254,6 @@ func parseMessageWithDigest(parts []string) (outboundMessage, error) {
 
 	message.cmdId = cmdId
 	message.msgType = MsgType(msgType)
-	message.data = data
 	message.timestamp = timestamp
 	message.checksum = checksum > 0
 	return message, nil

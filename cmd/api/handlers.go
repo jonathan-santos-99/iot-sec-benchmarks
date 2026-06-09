@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"fishSim/internal/metrics"
 	"fishSim/views"
 )
 
@@ -95,7 +96,7 @@ func (app *application) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	metrics := app.metricsService.GetMetrics()
+	metrics := metrics.GetMetrics()
 
 	err := app.writeJSON(w, 200, envelope{"data": metrics})
 	if err != nil {
