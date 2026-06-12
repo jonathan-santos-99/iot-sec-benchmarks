@@ -1,5 +1,5 @@
 bin/
-.vscode
+**.vscode
 .env
 data/pwfile
 mosquitto/config/pwfile
@@ -7,3 +7,5 @@ mosquitto/data/*
 mosquitto/log/*
 mosquitto/certs/*
 certs/*
+**/build
+**/managed_components
