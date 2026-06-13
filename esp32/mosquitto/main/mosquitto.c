@@ -1,109 +1,133 @@
+#include <stdio.h>
+#include <stdint.h>
 #include <string.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
+#include <stdlib.h>
+#include <inttypes.h>
 #include "esp_system.h"
-#include "esp_wifi.h"
-#include "esp_event.h"
-#include "esp_log.h"
 #include "nvs_flash.h"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "wifi.c"
 
-#include "lwip/err.h"
-#include "lwip/sys.h"
+#include "esp_log.h"
+#include "mqtt_client.h"
 
 
-#define WIFI_SSID CONFIG_ESP_WIFI_SSID
-#define WIFI_PASS CONFIG_ESP_WIFI_PASSWORD
+static const char *MQTT_TAG = "mqtt_example";
 
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
-
-static EventGroupHandle_t s_wifi_event_group;
-static const char *TAG = "wifi station";
-
-static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-    if (event_base == WIFI_EVENT) {
-        switch (event_id) {
-            case WIFI_EVENT_STA_START: esp_wifi_connect(); break;
-            case WIFI_EVENT_STA_DISCONNECTED: {
-                ESP_LOGE(TAG, "connect to the AP fail");
-                esp_wifi_connect();
-            } break;
-        }
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+static const char *event_id_to_string(int32_t event_id) {
+    switch (event_id) {
+        case MQTT_EVENT_ANY:             return "MQTT_EVENT_ANY";
+        case MQTT_EVENT_ERROR:           return "MQTT_EVENT_ERROR";
+        case MQTT_EVENT_CONNECTED:       return "MQTT_EVENT_CONNECTED";
+        case MQTT_EVENT_DISCONNECTED:    return "MQTT_EVENT_DISCONNECTED";
+        case MQTT_EVENT_SUBSCRIBED:      return "MQTT_EVENT_SUBSCRIBED";
+        case MQTT_EVENT_UNSUBSCRIBED:    return "MQTT_EVENT_UNSUBSCRIBED";
+        case MQTT_EVENT_PUBLISHED:       return "MQTT_EVENT_PUBLISHED";
+        case MQTT_EVENT_DATA:            return "MQTT_EVENT_DATA";
+        case MQTT_EVENT_BEFORE_CONNECT:  return "MQTT_EVENT_BEFORE_CONNECT";
+        case MQTT_EVENT_DELETED:         return "MQTT_EVENT_DELETED";
+        case MQTT_USER_EVENT:            return "MQTT_USER_EVENT";
+        default:                         return "MQTT_UNKNOW_EVENT";
     }
 }
 
-void wifi_init_sta(void) {
-    s_wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+typedef struct {
+    char *content;
+    int len;
+} String_View;
 
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
+static String_View chop_until(String_View *sv, char delimiter) {
+    char *start = sv->content;
+    while (sv->len > 0 && *sv->content != delimiter) {
+        sv->len--;
+        sv->content++;
+    }
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
-
-
-    wifi_sta_config_t sta = {
-        .ssid                = WIFI_SSID,
-        .password            = WIFI_PASS,
-        .threshold.authmode  = WIFI_AUTH_OPEN,
+    String_View result = {
+        .content = start,
+        .len     = sv->content - start
     };
 
-    wifi_config_t wifi_config = {0};
-    wifi_config.sta = sta;
+    if (sv->len > 0 && *sv->content == delimiter) {
+        sv->len--;
+        sv->content++;
+    }
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK(esp_wifi_start() );
+    return result;
+}
 
-    ESP_LOGI(TAG, "wifi_init_sta finished.");
+static void handle_event_data(esp_mqtt_event_handle_t event) {
+    String_View sv = {
+        .content = event->data,
+        .len = event->data_len
+    };
 
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
+    int parts[4] = {0};
 
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "connected to ap SSID: %s", WIFI_SSID);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGE(TAG, "Failed to connect to SSID: %s", WIFI_SSID);
-    } else {
-        ESP_LOGE(TAG, "UNEXPECTED EVENT");
+    for (int i = 0; i < 4; i++) {
+        String_View field = chop_until(&sv, ';');
+        if (field.len > 0) {
+            char *endptr = field.content + field.len;
+            parts[i] = strtol(field.content, &endptr, 10);
+        }
+    }
+
+    int id = parts[0];
+    int algorithm = parts[1];
+    int duration = parts[2];
+    int checksum = parts[3];
+    printf("id = %d, algorithm = %d, duration = %d, checksum = %d", id, algorithm, duration, checksum);
+}
+
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
+    ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%" PRIi32 "", base, event_id);
+    esp_mqtt_event_handle_t event = event_data;
+    esp_mqtt_client_handle_t client = event->client;
+    int msg_id;
+    (void) msg_id;
+    (void) client;
+
+    ESP_LOGI(MQTT_TAG, "%s", event_id_to_string(event->event_id));
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED: {
+            msg_id = esp_mqtt_client_subscribe(client, "inbound", 0);
+            ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+        } break;
+
+        case MQTT_EVENT_DATA: handle_event_data(event); break;
+
+        default: break;
     }
 }
 
-void app_main(void)
+static void mqtt_app_start(void)
 {
+    esp_mqtt_client_config_t mqtt_cfg = { .broker.address.uri = CONFIG_BROKER_URL };
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(client);
+}
+
+static esp_err_t setup_nvs(void) {
     esp_err_t ret = nvs_flash_init();
+
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
       ret = nvs_flash_init();
     }
-    ESP_ERROR_CHECK(ret);
 
-    esp_log_level_set("wifi", CONFIG_LOG_MAXIMUM_LEVEL);
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+    return ret;
+}
 
-    wifi_init_sta();
+void setup(void) {
+    ESP_ERROR_CHECK(setup_nvs());
+    wifi_connect();
+    mqtt_app_start();
+}
 
+void app_main(void) {
+    setup();
     for (;;) {
         vTaskDelay(500 / portTICK_PERIOD_MS);
     }
