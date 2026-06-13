@@ -9,3 +9,4 @@ mosquitto/certs/*
 certs/*
 **/build
 **/managed_components
+esp32/mosquitto/sdkconfig*
