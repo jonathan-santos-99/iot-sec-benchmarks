@@ -56,3 +56,6 @@ benchmark: ./scripts/benchmark_starter.py
 											$(MQTT_USER)               \
 											$(MQTT_PASS)               \
 											$(MQTT_CA_FILE)
+
+generate_topics_c_file: $(MQTT_OUTBOUND_CONFIG)
+	@python3 ./scripts/generate_topics_c_file.py $(MQTT_OUTBOUND_CONFIG)

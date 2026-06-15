@@ -9,12 +9,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "encrypt.c"
+#include "driver/gpio.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+
+#include "encrypt.c"
 #include "wifi.c"
+#include "topics.h"
 
 #include "esp_log.h"
 #include "mqtt_client.h"
@@ -22,8 +25,9 @@
 static const char *MQTT_TAG = "mqtt";
 
 #define COMMAND_QUEUE_MAX_LEN 128
-#define MOCK_DATA_SIZE 1024
+#define MOCK_DATA_SIZE 1024 + 1
 #define MSG_MAX_SIZE 2*1024
+#define LED_DEBUG_PIN 4
 
 typedef enum {
     START = 0,
@@ -110,12 +114,14 @@ static void handle_event_data(esp_mqtt_event_handle_t event) {
 
 static char *mock_data() {
     static char data[MOCK_DATA_SIZE];
-    for (int i = 0; i < MOCK_DATA_SIZE - 1; i++) {
-        data[i] = 'O';
+    const char *hex = "0123456789ABCDEF";
+    for (int i = 0; i < MOCK_DATA_SIZE - 1; i += 2) {
+        char b = rand() % 255;
+        data[i + 0] = hex[(b>>4)&0x0F];
+        data[i + 1] = hex[b&0x0F];
     }
 
     data[MOCK_DATA_SIZE - 1] = '\0';
-
     return data;
 }
 
@@ -135,7 +141,7 @@ static char *fmt_message(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
-    vsprintf(buffer, fmt, args);
+    vsnprintf(buffer, MSG_MAX_SIZE, fmt, args);
     va_end(args);
 
     return buffer;
@@ -150,20 +156,32 @@ static char *new_message(int id, Msg_Type msgtype, const char *data, uint64_t us
 }
 
 static void publish(esp_mqtt_client_handle_t client, Algorithm algorithm, char *data) {
-    const char *encrypted_data = encrypt_data(algorithm, "", data);
-    esp_mqtt_client_publish(client, "outbound/plain", encrypted_data, strlen(encrypted_data), 0, 0);
+    Topic_Info topic = outbond_topics[algorithm];
+    if (algorithm == PLAIN_TEXT) {
+        esp_mqtt_client_publish(client, topic.name, data, strlen(data), 0, 0);
+    } else {
+        size_t encrypted_data_size = 0;
+        uint8_t *encrypted_data = encrypt_data(algorithm, topic.key, data, &encrypted_data_size);
+        esp_mqtt_client_publish(client, topic.name, (const char *) encrypted_data, encrypted_data_size, 0, 0);
+        free(encrypted_data);
+    }
+}
+
+static void debug_led_on(void) {
+    gpio_set_level(LED_DEBUG_PIN, 1);
+}
+
+static void debug_led_off(void) {
+    gpio_set_level(LED_DEBUG_PIN, 0);
 }
 
 static void process_commands(void *args) {
     Command cmd;
     for (;;) {
-        if(xQueueReceive(cmd_queue, &cmd, portMAX_DELAY)) {
+        if (xQueueReceive(cmd_queue, &cmd, portMAX_DELAY)) {
             ESP_LOGI(MQTT_TAG, "Starting command %d", cmd.id);
-            publish(
-                cmd.client,
-                cmd.algorithm,
-                new_message(cmd.id, START, mock_data(), time_unix_ns(), cmd.checksum)
-            );
+            debug_led_on();
+            publish(cmd.client, cmd.algorithm, new_message(cmd.id, START, mock_data(), time_unix_ns(), cmd.checksum));
 
             const uint64_t duration_ns = cmd.duration_secs*1e9;
             uint64_t timer = 0;
@@ -178,6 +196,7 @@ static void process_commands(void *args) {
 
             ESP_LOGI(MQTT_TAG, "Ending command %d", cmd.id);
             publish(cmd.client, cmd.algorithm, new_message(cmd.id, STOP , mock_data(), time_unix_ns(), cmd.checksum));
+            debug_led_off();
         }
     }
 }
@@ -224,10 +243,16 @@ static esp_err_t setup_nvs(void) {
 void app_main(void) {
     ESP_ERROR_CHECK(setup_nvs());
     wifi_connect();
+    encrypt_init();
+
+    gpio_set_level(LED_DEBUG_PIN, 0);
+    gpio_reset_pin(LED_DEBUG_PIN);
+    gpio_set_direction(LED_DEBUG_PIN, GPIO_MODE_OUTPUT);
     mqtt_app_start();
+    srand(time(NULL));
 
     cmd_queue = xQueueCreate(64, sizeof(Command));
     assert(cmd_queue != NULL && "Could not create command queue!");
 
-    xTaskCreate(process_commands, "comamnd_processor", 2048, NULL, 1, NULL);
+    xTaskCreate(process_commands, "command_processor", 2048*2, NULL, 1, NULL);
 }

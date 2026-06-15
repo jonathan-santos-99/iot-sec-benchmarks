@@ -108,7 +108,7 @@ func HandleMessage(c mqtt.Client, message mqtt.Message) {
 	raw := message.Payload()
 	parsedMessage, err := parseMessage(algorithm, raw)
 	if err != nil {
-		log.Printf("Could not parse message '%s': %s", raw, err)
+		log.Printf("Could not parse message: %s", err)
 		return
 	}
 
