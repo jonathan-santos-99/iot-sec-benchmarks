@@ -4,3 +4,4 @@ dependencies:
   idf:
     version: '>=4.1.0'
   espressif/mqtt: '*'
+  espressif/libsodium: ^1.0.22

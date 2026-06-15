@@ -1,8 +1,8 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sodium/crypto_stream_chacha20.h>
 #include "aes/esp_aes.h"
-
 #include "topics.h"
 
 #define BLOCK_SIZE 16
@@ -58,9 +58,27 @@ static uint8_t *encrypt_aes(const char *plaintext, size_t *output_size) {
     return output_buffer;
 }
 
-static uint8_t *encrypt_chacha20(const uint8_t key[32], const char *plaintext) {
-    assert(0 && "TODO: CHACHA20 not implemented");
-    return NULL;
+static uint8_t *encrypt_chacha20(const uint8_t key[32], const char *plaintext, size_t *output_size) {
+    uint8_t nonce[crypto_stream_chacha20_ietf_NONCEBYTES];
+    random_byte_array(nonce, crypto_stream_chacha20_ietf_NONCEBYTES);
+
+    size_t input_len = strlen(plaintext);
+    size_t _output_size = input_len + crypto_stream_chacha20_ietf_NONCEBYTES;
+    uint8_t *output_buffer = malloc(sizeof(uint64_t)*_output_size);
+    if (output_size) {
+        *output_size = _output_size;
+    }
+
+    memcpy(output_buffer, nonce, crypto_stream_chacha20_ietf_NONCEBYTES);
+
+    crypto_stream_chacha20_ietf_xor(
+        output_buffer+crypto_stream_chacha20_ietf_NONCEBYTES,
+        (const unsigned char *)plaintext,
+        input_len,
+        nonce, key
+    );
+
+    return output_buffer;
 }
 
 uint8_t *encrypt_data(Algorithm algorithm, const uint8_t key[32], char *plaintext, size_t *output_size) {
@@ -70,7 +88,7 @@ uint8_t *encrypt_data(Algorithm algorithm, const uint8_t key[32], char *plaintex
             return (uint8_t *) strdup(plaintext);
         }
         case AES:      return encrypt_aes(plaintext, output_size);
-        case CHACHA20: return encrypt_chacha20(key, plaintext);
+        case CHACHA20: return encrypt_chacha20(key, plaintext, output_size);
     }
 
     assert(0 && "unreacheable");
