@@ -2,7 +2,11 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <inttypes.h>
+#include <assert.h>
+#include <time.h>
+#include "encrypt.c"
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
@@ -12,8 +16,55 @@
 #include "esp_log.h"
 #include "mqtt_client.h"
 
+static const char *MQTT_TAG = "mqtt";
 
-static const char *MQTT_TAG = "mqtt_example";
+#define COMMAND_QUEUE_MAX_LEN 128
+#define MOCK_DATA_SIZE 1024
+#define MSG_MAX_SIZE 2*1024
+
+typedef enum {
+    START = 0,
+    CONTINUE,
+    STOP
+} Msg_Type;
+
+typedef struct {
+    char *content;
+    int len;
+} String_View;
+
+typedef struct {
+    esp_mqtt_client_handle_t client;
+    int id;
+    int algorithm;
+    int duration_secs;
+    int checksum;
+} Command;
+
+typedef struct {
+    Command commands[COMMAND_QUEUE_MAX_LEN];
+    int tail;
+} Command_Queue;
+
+static Command_Queue cmd_queue = {0};
+
+static void enqueue_command(Command command) {
+    if (cmd_queue.tail >= COMMAND_QUEUE_MAX_LEN) {
+        ESP_LOGE(MQTT_TAG, "Command queue is full, ignoring command %d", command.id);
+        return;
+    }
+
+    cmd_queue.commands[cmd_queue.tail++] = command;
+}
+
+static Command dequeue_command() {
+    if (cmd_queue.tail <= 0) {
+        assert(0 && "trying to dequeue a empty queue");
+    }
+
+    Command cmd = cmd_queue.commands[--cmd_queue.tail];
+    return cmd;
+}
 
 static const char *event_id_to_string(int32_t event_id) {
     switch (event_id) {
@@ -31,11 +82,6 @@ static const char *event_id_to_string(int32_t event_id) {
         default:                         return "MQTT_UNKNOW_EVENT";
     }
 }
-
-typedef struct {
-    char *content;
-    int len;
-} String_View;
 
 static String_View chop_until(String_View *sv, char delimiter) {
     char *start = sv->content;
@@ -57,14 +103,10 @@ static String_View chop_until(String_View *sv, char delimiter) {
     return result;
 }
 
-static void handle_event_data(esp_mqtt_event_handle_t event) {
-    String_View sv = {
-        .content = event->data,
-        .len = event->data_len
-    };
+static Command parse_command(char *data, int data_len) {
+    String_View sv = { data, data_len };
 
     int parts[4] = {0};
-
     for (int i = 0; i < 4; i++) {
         String_View field = chop_until(&sv, ';');
         if (field.len > 0) {
@@ -73,11 +115,93 @@ static void handle_event_data(esp_mqtt_event_handle_t event) {
         }
     }
 
-    int id = parts[0];
-    int algorithm = parts[1];
-    int duration = parts[2];
-    int checksum = parts[3];
-    printf("id = %d, algorithm = %d, duration = %d, checksum = %d", id, algorithm, duration, checksum);
+    return (Command) {
+        .id            = parts[0],
+        .algorithm     = parts[1],
+        .duration_secs = parts[2],
+        .checksum      = parts[3]
+    };
+}
+
+static void handle_event_data(esp_mqtt_event_handle_t event) {
+    Command cmd = parse_command(event->data, event->data_len);
+    cmd.client = event->client;
+    enqueue_command(cmd);
+}
+
+static char *mock_data() {
+    static char data[MOCK_DATA_SIZE];
+    for (int i = 0; i < MOCK_DATA_SIZE - 1; i++) {
+        data[i] = 'O';
+    }
+
+    data[MOCK_DATA_SIZE - 1] = '\0';
+
+    return data;
+}
+
+static uint64_t time_unix_ns(void) {
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+        return ((uint64_t)ts.tv_sec*1000000000ULL) + (uint64_t)ts.tv_nsec;
+    }
+
+    ESP_LOGE(TAG, "Failed to get clock time");
+    return 0;
+}
+
+static char *fmt_message(const char *fmt, ...) {
+	static char buffer[MSG_MAX_SIZE];
+    va_list args;
+    va_start(args, fmt);
+
+    vsprintf(buffer, fmt, args);
+    va_end(args);
+
+    return buffer;
+}
+
+static char *new_message(int id, Msg_Type msgtype, const char *data, uint64_t usec, int checksum) {
+    if (checksum > 0) {
+        assert(0 && "TODO: checksum not implemented");
+	}
+
+
+    return fmt_message("%d;%d;%s;%"PRIu64";%d", id, msgtype, data, usec, checksum);
+}
+
+static void publish(esp_mqtt_client_handle_t client, Algorithm algorithm, char *data) {
+    const char *encrypted_data = encrypt_data(algorithm, "", data);
+    esp_mqtt_client_publish(client, "outbound/plain", encrypted_data, strlen(encrypted_data), 0, 0);
+}
+
+static void process_commands() {
+    if (cmd_queue.tail <= 0) {
+        return;
+    }
+
+    Command cmd = dequeue_command();
+    ESP_LOGI(MQTT_TAG, "Starting command %d", cmd.id);
+    publish(
+        cmd.client,
+        cmd.algorithm,
+        new_message(cmd.id, START, mock_data(), time_unix_ns(), cmd.checksum)
+    );
+
+    const uint64_t duration_ns = cmd.duration_secs*1e9;
+    uint64_t timer = 0;
+    uint64_t last  = time_unix_ns();
+    while (timer <= duration_ns) {
+        uint64_t now = time_unix_ns();
+        char *msg = new_message(cmd.id, CONTINUE, mock_data(), now, cmd.checksum);
+        publish(cmd.client, cmd.algorithm, msg);
+        timer += now - last;
+        last = now;
+    }
+
+    ESP_LOGI(MQTT_TAG, "Ending command %d", cmd.id);
+    publish(cmd.client, cmd.algorithm, new_message(cmd.id, STOP , mock_data(), time_unix_ns(), cmd.checksum));
 }
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -101,8 +225,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-static void mqtt_app_start(void)
-{
+static void mqtt_app_start(void) {
     esp_mqtt_client_config_t mqtt_cfg = { .broker.address.uri = CONFIG_BROKER_URL };
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
@@ -129,6 +252,7 @@ void setup(void) {
 void app_main(void) {
     setup();
     for (;;) {
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+        process_commands();
     }
 }

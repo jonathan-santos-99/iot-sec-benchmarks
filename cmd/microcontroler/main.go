@@ -141,7 +141,6 @@ func processCommands() {
 			case <-timeout:
 				break finish
 			default:
-
 				msg := newMessage(q.cmd.id, Continue, mockdata(), q.cmd.checksum)
 				publish(q.c, q.cmd.algorithm, msg)
 			}
