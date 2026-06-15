@@ -6,6 +6,9 @@
 #include <inttypes.h>
 #include <assert.h>
 #include <time.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include "encrypt.c"
 #include "esp_system.h"
 #include "nvs_flash.h"
@@ -41,30 +44,7 @@ typedef struct {
     int checksum;
 } Command;
 
-typedef struct {
-    Command commands[COMMAND_QUEUE_MAX_LEN];
-    int tail;
-} Command_Queue;
-
-static Command_Queue cmd_queue = {0};
-
-static void enqueue_command(Command command) {
-    if (cmd_queue.tail >= COMMAND_QUEUE_MAX_LEN) {
-        ESP_LOGE(MQTT_TAG, "Command queue is full, ignoring command %d", command.id);
-        return;
-    }
-
-    cmd_queue.commands[cmd_queue.tail++] = command;
-}
-
-static Command dequeue_command() {
-    if (cmd_queue.tail <= 0) {
-        assert(0 && "trying to dequeue a empty queue");
-    }
-
-    Command cmd = cmd_queue.commands[--cmd_queue.tail];
-    return cmd;
-}
+QueueHandle_t cmd_queue;
 
 static const char *event_id_to_string(int32_t event_id) {
     switch (event_id) {
@@ -103,7 +83,7 @@ static String_View chop_until(String_View *sv, char delimiter) {
     return result;
 }
 
-static Command parse_command(char *data, int data_len) {
+static void parse_command(Command *cmd, char *data, int data_len) {
     String_View sv = { data, data_len };
 
     int parts[4] = {0};
@@ -115,18 +95,17 @@ static Command parse_command(char *data, int data_len) {
         }
     }
 
-    return (Command) {
-        .id            = parts[0],
-        .algorithm     = parts[1],
-        .duration_secs = parts[2],
-        .checksum      = parts[3]
-    };
+    cmd->id            = parts[0];
+    cmd->algorithm     = parts[1];
+    cmd->duration_secs = parts[2];
+    cmd->checksum      = parts[3];
 }
 
 static void handle_event_data(esp_mqtt_event_handle_t event) {
-    Command cmd = parse_command(event->data, event->data_len);
+    Command cmd = {0};
+    parse_command(&cmd, event->data, event->data_len);
     cmd.client = event->client;
-    enqueue_command(cmd);
+    xQueueSend(cmd_queue, &cmd, 1000 / portTICK_PERIOD_MS);
 }
 
 static char *mock_data() {
@@ -167,7 +146,6 @@ static char *new_message(int id, Msg_Type msgtype, const char *data, uint64_t us
         assert(0 && "TODO: checksum not implemented");
 	}
 
-
     return fmt_message("%d;%d;%s;%"PRIu64";%d", id, msgtype, data, usec, checksum);
 }
 
@@ -176,32 +154,32 @@ static void publish(esp_mqtt_client_handle_t client, Algorithm algorithm, char *
     esp_mqtt_client_publish(client, "outbound/plain", encrypted_data, strlen(encrypted_data), 0, 0);
 }
 
-static void process_commands() {
-    if (cmd_queue.tail <= 0) {
-        return;
+static void process_commands(void *args) {
+    Command cmd;
+    for (;;) {
+        if(xQueueReceive(cmd_queue, &cmd, portMAX_DELAY)) {
+            ESP_LOGI(MQTT_TAG, "Starting command %d", cmd.id);
+            publish(
+                cmd.client,
+                cmd.algorithm,
+                new_message(cmd.id, START, mock_data(), time_unix_ns(), cmd.checksum)
+            );
+
+            const uint64_t duration_ns = cmd.duration_secs*1e9;
+            uint64_t timer = 0;
+            uint64_t last  = time_unix_ns();
+            while (timer <= duration_ns) {
+                uint64_t now = time_unix_ns();
+                char *msg = new_message(cmd.id, CONTINUE, mock_data(), now, cmd.checksum);
+                publish(cmd.client, cmd.algorithm, msg);
+                timer += now - last;
+                last = now;
+            }
+
+            ESP_LOGI(MQTT_TAG, "Ending command %d", cmd.id);
+            publish(cmd.client, cmd.algorithm, new_message(cmd.id, STOP , mock_data(), time_unix_ns(), cmd.checksum));
+        }
     }
-
-    Command cmd = dequeue_command();
-    ESP_LOGI(MQTT_TAG, "Starting command %d", cmd.id);
-    publish(
-        cmd.client,
-        cmd.algorithm,
-        new_message(cmd.id, START, mock_data(), time_unix_ns(), cmd.checksum)
-    );
-
-    const uint64_t duration_ns = cmd.duration_secs*1e9;
-    uint64_t timer = 0;
-    uint64_t last  = time_unix_ns();
-    while (timer <= duration_ns) {
-        uint64_t now = time_unix_ns();
-        char *msg = new_message(cmd.id, CONTINUE, mock_data(), now, cmd.checksum);
-        publish(cmd.client, cmd.algorithm, msg);
-        timer += now - last;
-        last = now;
-    }
-
-    ESP_LOGI(MQTT_TAG, "Ending command %d", cmd.id);
-    publish(cmd.client, cmd.algorithm, new_message(cmd.id, STOP , mock_data(), time_unix_ns(), cmd.checksum));
 }
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -243,16 +221,13 @@ static esp_err_t setup_nvs(void) {
     return ret;
 }
 
-void setup(void) {
+void app_main(void) {
     ESP_ERROR_CHECK(setup_nvs());
     wifi_connect();
     mqtt_app_start();
-}
 
-void app_main(void) {
-    setup();
-    for (;;) {
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-        process_commands();
-    }
+    cmd_queue = xQueueCreate(64, sizeof(Command));
+    assert(cmd_queue != NULL && "Could not create command queue!");
+
+    xTaskCreate(process_commands, "comamnd_processor", 2048, NULL, 1, NULL);
 }
