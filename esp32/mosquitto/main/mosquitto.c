@@ -14,6 +14,7 @@
 #include "nvs_flash.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "mbedtls/md.h"
 
 #include "encrypt.c"
 #include "wifi.c"
@@ -23,10 +24,12 @@
 #include "mqtt_client.h"
 
 static const char *MQTT_TAG = "mqtt";
+static const char *hex = "0123456789ABCDEF";
+static mbedtls_md_context_t sha256_ctx;
 
 #define COMMAND_QUEUE_MAX_LEN 128
-#define MOCK_DATA_SIZE 1024 + 1
-#define MSG_MAX_SIZE 2*1024
+#define MOCK_DATA_SIZE 256 + 1
+#define MSG_MAX_SIZE 2*256
 #define LED_DEBUG_PIN 4
 
 typedef enum {
@@ -114,7 +117,6 @@ static void handle_event_data(esp_mqtt_event_handle_t event) {
 
 static char *mock_data() {
     static char data[MOCK_DATA_SIZE];
-    const char *hex = "0123456789ABCDEF";
     for (int i = 0; i < MOCK_DATA_SIZE - 1; i += 2) {
         char b = rand() % 255;
         data[i + 0] = hex[(b>>4)&0x0F];
@@ -128,7 +130,7 @@ static char *mock_data() {
 static uint64_t time_unix_ns(void) {
     struct timespec ts;
 
-    if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
         return ((uint64_t)ts.tv_sec*1000000000ULL) + (uint64_t)ts.tv_nsec;
     }
 
@@ -147,10 +149,30 @@ static char *fmt_message(const char *fmt, ...) {
     return buffer;
 }
 
+static char *sha256(const char *payload) {
+    // Initialize the message digest context
+    static char hex_string[32*2 + 1];
+    mbedtls_md_starts(&sha256_ctx);
+    unsigned char result[32];
+    mbedtls_md_update(&sha256_ctx, (const unsigned char*)payload, strlen(payload));
+    mbedtls_md_finish(&sha256_ctx, result);
+
+    int j = 0;
+    for (int i = 0; i < 32; i++, j += 2) {
+        hex_string[j + 0] = hex[(result[i]>>4)&0x0F];
+        hex_string[j + 1] = hex[(result[i]>>0)&0x0F];
+    }
+
+    hex_string[j] = '\0';
+    return hex_string;
+}
+
 static char *new_message(int id, Msg_Type msgtype, const char *data, uint64_t usec, int checksum) {
     if (checksum > 0) {
-        assert(0 && "TODO: checksum not implemented");
-	}
+        char *payload = fmt_message("%d;%s;%"PRIu64";%d", msgtype, data, usec, checksum);
+        char *digest = sha256(payload);
+        return fmt_message("%d;%s;%d;%s;%"PRIu64";%d", id, digest, msgtype, data, usec, checksum);
+    }
 
     return fmt_message("%d;%d;%s;%"PRIu64";%d", id, msgtype, data, usec, checksum);
 }
@@ -181,11 +203,11 @@ static void process_commands(void *args) {
         if (xQueueReceive(cmd_queue, &cmd, portMAX_DELAY)) {
             ESP_LOGI(MQTT_TAG, "Starting command %d", cmd.id);
             debug_led_on();
-            publish(cmd.client, cmd.algorithm, new_message(cmd.id, START, mock_data(), time_unix_ns(), cmd.checksum));
 
             const uint64_t duration_ns = cmd.duration_secs*1e9;
             uint64_t timer = 0;
             uint64_t last  = time_unix_ns();
+            publish(cmd.client, cmd.algorithm, new_message(cmd.id, START, mock_data(), last, cmd.checksum));
             while (timer <= duration_ns) {
                 uint64_t now = time_unix_ns();
                 char *msg = new_message(cmd.id, CONTINUE, mock_data(), now, cmd.checksum);
@@ -195,7 +217,7 @@ static void process_commands(void *args) {
             }
 
             ESP_LOGI(MQTT_TAG, "Ending command %d", cmd.id);
-            publish(cmd.client, cmd.algorithm, new_message(cmd.id, STOP , mock_data(), time_unix_ns(), cmd.checksum));
+            publish(cmd.client, cmd.algorithm, new_message(cmd.id, STOP , mock_data(), last, cmd.checksum));
             debug_led_off();
         }
     }
@@ -248,6 +270,10 @@ void app_main(void) {
     gpio_set_level(LED_DEBUG_PIN, 0);
     gpio_reset_pin(LED_DEBUG_PIN);
     gpio_set_direction(LED_DEBUG_PIN, GPIO_MODE_OUTPUT);
+
+    mbedtls_md_init(&sha256_ctx);
+    mbedtls_md_setup(&sha256_ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+
     mqtt_app_start();
     srand(time(NULL));
 

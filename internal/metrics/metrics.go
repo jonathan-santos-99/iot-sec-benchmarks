@@ -21,11 +21,14 @@ type Metric struct {
 	id        int
 	algorithm ecryption.Algorithm
 	start     time.Time
+	recvStart time.Time
 	end       *time.Time
+	recvEnd   *time.Time
 	mu        sync.Mutex
 	checksum  bool
 	tls       bool
-	reqs      []int64
+	reqs      []int64 // server timestamps
+	recvReqs  []int64 // server receive timestamps
 }
 
 var db = struct {
@@ -38,43 +41,90 @@ var db = struct {
 type MetricsOutput struct {
 	Id       int    `json:"id"`
 	Reqs     []int  `json:"requests_per_second"`
+	RecvReqs []int  `json:"received_requests_per_second"`
 	Type     string `json:"type"`
 	Checksum bool   `json:"checksum"`
 	TLS      bool   `json:"tls"`
 }
 
-func GetMetrics() []MetricsOutput {
-	out := make([]MetricsOutput, 0)
-	for _, metric := range db.data {
-		if len(metric.reqs) <= 0 {
+func bucketizePerSecond(timestamps []int64, start, end int64) []int {
+	if len(timestamps) == 0 || end <= start {
+		return []int{}
+	}
+
+	oneSec := int64(time.Second)
+	seconds := int((end - start) / oneSec)
+	out := make([]int, seconds)
+	for _, ts := range timestamps {
+		if ts < start || ts >= end {
 			continue
 		}
 
-		var reqsPerSec []int
-		reqsCount := 1
-		lastReqTimestamp := metric.reqs[0]
-		var accDuration int64 = 0
-		for _, timestamp := range metric.reqs[1:] {
-			accDuration += (timestamp - lastReqTimestamp)
-			if time.Duration(accDuration) >= 1*time.Second {
-				reqsPerSec = append(reqsPerSec, reqsCount)
-				accDuration = 0
-				reqsCount = 1
-			} else {
-				reqsCount += 1
-			}
+		idx := int((ts - start) / oneSec)
+		if idx >= 0 && idx < len(out) {
+			out[idx]++
+		}
+	}
 
-			lastReqTimestamp = timestamp
+	return out
+}
+
+func GetMetrics() []MetricsOutput {
+	db.mu.Lock()
+	records := make([]*Metric, 0, len(db.data))
+	for _, m := range db.data {
+		records = append(records, m)
+	}
+	db.mu.Unlock()
+
+	out := make([]MetricsOutput, 0, len(records))
+	for _, metric := range db.data {
+		metric.mu.Lock()
+		reqs := append([]int64(nil), metric.reqs...)
+		recvReqs := append([]int64(nil), metric.recvReqs...)
+		start := metric.start
+		var end *time.Time
+		if metric.end != nil {
+			t := *metric.end
+			end = &t
+		}
+		recvStart := metric.recvStart
+		var recvEnd *time.Time
+		if metric.recvEnd != nil {
+			t := *metric.recvEnd
+			recvEnd = &t
+		}
+		id := metric.id
+		algo := metric.algorithm
+		checksum := metric.checksum
+		tls := metric.tls
+
+		metric.mu.Unlock()
+
+		if len(reqs) == 0 && len(recvReqs) == 0 {
+			continue
 		}
 
-		reqsPerSec = append(reqsPerSec, reqsCount)
+		slices.Sort(reqs)
+		slices.Sort(recvReqs)
+
+		var reqsPerSec []int
+		if end != nil {
+			reqsPerSec = bucketizePerSecond(reqs, start.UnixNano(), end.UnixNano())
+		}
+
+		var recvPerSec []int
+		if recvEnd != nil {
+			recvPerSec = bucketizePerSecond(recvReqs, recvStart.UnixNano(), recvEnd.UnixNano())
+		}
 
 		out = append(out, MetricsOutput{
-			Id:       metric.id,
-			Type:     metric.algorithm.String(),
+			Id:       id,
+			Type:     algo.String(),
 			Reqs:     reqsPerSec,
-			Checksum: metric.checksum,
-			TLS:      metric.tls,
+			RecvReqs: recvPerSec,
+			Checksum: checksum,
+			TLS:      tls,
 		})
 	}
 
@@ -122,12 +172,20 @@ func HandleMessage(c mqtt.Client, message mqtt.Message) {
 		record.id = parsedMessage.cmdId
 		record.checksum = parsedMessage.checksum
 		record.start = time.Unix(0, parsedMessage.timestamp)
+		record.recvStart = time.Now()
 		record.tls = tls
 		db.data[parsedMessage.cmdId] = record
 		log.Printf("Start gathering data of benchmark %d\n", parsedMessage.cmdId)
 
 	case Continue:
-		record := db.data[parsedMessage.cmdId]
+		db.mu.Lock()
+		record, ok := db.data[parsedMessage.cmdId]
+		db.mu.Unlock()
+		if !ok {
+			log.Printf("Ignoring data for unknown benchmark id=%d", parsedMessage.cmdId)
+			return
+		}
+
 		record.mu.Lock()
 		defer record.mu.Unlock()
 		if record.end != nil {
@@ -136,14 +194,20 @@ func HandleMessage(c mqtt.Client, message mqtt.Message) {
 		}
 
 		record.reqs = append(record.reqs, parsedMessage.timestamp)
+		record.recvReqs = append(record.recvReqs, time.Now().UnixNano())
+
 	case Stop:
-		record := db.data[parsedMessage.cmdId]
-		record.mu.Lock()
-		defer record.mu.Unlock()
+		db.mu.Lock()
+		record, ok := db.data[parsedMessage.cmdId]
+		db.mu.Unlock()
+		if !ok {
+			log.Printf("Ignoring stop for unknown benchmark id=%d", parsedMessage.cmdId)
+			return
+		}
 
 		log.Printf("Finish gathering data of benchmark %d\n", parsedMessage.cmdId)
 		record.end = new(time.Unix(0, parsedMessage.timestamp))
-		slices.Sort(record.reqs)
+		record.recvEnd = new(time.Now())
 	}
 }
 
@@ -221,11 +285,6 @@ func parseMessageWithDigest(parts []string) (outboundMessage, error) {
 	if err != nil {
 		return outboundMessage{}, err
 	}
-
-	// data, err :=
-	// if err != nil {
-	// 	return outboundMessage{}, err
-	// }
 
 	timestamp, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {

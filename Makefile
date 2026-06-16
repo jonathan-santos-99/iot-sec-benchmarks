@@ -10,7 +10,7 @@ MQTT_SENSOR_KEY_FILE   := ./certs/sensor-001-key.pem
 MQTT_BANCKEND_CRT_FILE := ./certs/backend-crt.pem
 MQTT_BANCKEND_KEY_FILE := ./certs/backend-key.pem
 
-BENCHMARK_DURATION_SECS := 4
+BENCHMARK_DURATION_SECS := 10
 
 build:
 	go build -o bin/fishSim ./cmd/api
