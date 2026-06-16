@@ -9,20 +9,24 @@ typedef enum {
 
 typedef struct {
     const char *name;
+    const char *tls_name;
     const uint8_t key[32] __attribute__((nonstring));
 } Topic_Info;
 
 Topic_Info outbond_topics[] = {
     [PLAIN_TEXT] = {
         .name = "outbound/plain",
+        .tls_name = "tls/outbound/plain",
         .key  = "",
     },
     [AES] = {
         .name = "outbound/aes",
+        .tls_name = "tls/outbound/aes",
         .key  = "passphrasewhichneedstobe32bytess",
     },
     [CHACHA20] = {
         .name = "outbound/chacha20",
+        .tls_name = "tls/outbound/chacha20",
         .key  = "this-is-a-secret-32-byte-key-abc",
     },
 };

@@ -13,6 +13,7 @@
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
+#include "esp_sntp.h"
 #include "esp_netif.h"
 #include "mbedtls/md.h"
 
@@ -32,6 +33,16 @@ static mbedtls_md_context_t sha256_ctx;
 #define MSG_MAX_SIZE 2*256
 #define LED_DEBUG_PIN 4
 
+extern const uint8_t ca_crt_start[] asm("_binary_ca_crt_start");
+extern const uint8_t ca_crt_end[]   asm("_binary_ca_crt_end");
+
+extern const uint8_t client_crt_start[] asm("_binary_client_crt_start");
+extern const uint8_t client_crt_end[]   asm("_binary_client_crt_end");
+
+extern const uint8_t client_key_start[] asm("_binary_client_key_start");
+extern const uint8_t client_key_end[]   asm("_binary_client_key_end");
+
+
 typedef enum {
     START = 0,
     CONTINUE,
@@ -49,6 +60,7 @@ typedef struct {
     int algorithm;
     int duration_secs;
     int checksum;
+    bool tls;
 } Command;
 
 QueueHandle_t cmd_queue;
@@ -108,10 +120,11 @@ static void parse_command(Command *cmd, char *data, int data_len) {
     cmd->checksum      = parts[3];
 }
 
-static void handle_event_data(esp_mqtt_event_handle_t event) {
+static void handle_event_data(esp_mqtt_event_handle_t event, bool tls) {
     Command cmd = {0};
     parse_command(&cmd, event->data, event->data_len);
     cmd.client = event->client;
+    cmd.tls = tls;
     xQueueSend(cmd_queue, &cmd, 1000 / portTICK_PERIOD_MS);
 }
 
@@ -177,14 +190,15 @@ static char *new_message(int id, Msg_Type msgtype, const char *data, uint64_t us
     return fmt_message("%d;%d;%s;%"PRIu64";%d", id, msgtype, data, usec, checksum);
 }
 
-static void publish(esp_mqtt_client_handle_t client, Algorithm algorithm, char *data) {
+static void publish(esp_mqtt_client_handle_t client, Algorithm algorithm, char *data, bool tls) {
     Topic_Info topic = outbond_topics[algorithm];
+    const char *topic_name =  tls ? topic.tls_name : topic.name;
     if (algorithm == PLAIN_TEXT) {
-        esp_mqtt_client_publish(client, topic.name, data, strlen(data), 0, 0);
+        esp_mqtt_client_publish(client, topic_name, data, strlen(data), 0, 0);
     } else {
         size_t encrypted_data_size = 0;
         uint8_t *encrypted_data = encrypt_data(algorithm, topic.key, data, &encrypted_data_size);
-        esp_mqtt_client_publish(client, topic.name, (const char *) encrypted_data, encrypted_data_size, 0, 0);
+        esp_mqtt_client_publish(client, topic_name, (const char *) encrypted_data, encrypted_data_size, 0, 0);
         free(encrypted_data);
     }
 }
@@ -197,7 +211,7 @@ static void debug_led_off(void) {
     gpio_set_level(LED_DEBUG_PIN, 0);
 }
 
-static void process_commands(void *args) {
+static void process_commands() {
     Command cmd;
     for (;;) {
         if (xQueueReceive(cmd_queue, &cmd, portMAX_DELAY)) {
@@ -207,17 +221,17 @@ static void process_commands(void *args) {
             const uint64_t duration_ns = cmd.duration_secs*1e9;
             uint64_t timer = 0;
             uint64_t last  = time_unix_ns();
-            publish(cmd.client, cmd.algorithm, new_message(cmd.id, START, mock_data(), last, cmd.checksum));
+            publish(cmd.client, cmd.algorithm, new_message(cmd.id, START, mock_data(), last, cmd.checksum), cmd.tls);
             while (timer <= duration_ns) {
                 uint64_t now = time_unix_ns();
                 char *msg = new_message(cmd.id, CONTINUE, mock_data(), now, cmd.checksum);
-                publish(cmd.client, cmd.algorithm, msg);
+                publish(cmd.client, cmd.algorithm, msg, cmd.tls);
                 timer += now - last;
                 last = now;
             }
 
             ESP_LOGI(MQTT_TAG, "Ending command %d", cmd.id);
-            publish(cmd.client, cmd.algorithm, new_message(cmd.id, STOP , mock_data(), last, cmd.checksum));
+            publish(cmd.client, cmd.algorithm, new_message(cmd.id, STOP , mock_data(), last, cmd.checksum), cmd.tls);
             debug_led_off();
         }
     }
@@ -227,28 +241,58 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%" PRIi32 "", base, event_id);
     esp_mqtt_event_handle_t event = event_data;
     esp_mqtt_client_handle_t client = event->client;
-    int msg_id;
-    (void) msg_id;
-    (void) client;
+    bool tls = *(bool *)handler_args;
 
     ESP_LOGI(MQTT_TAG, "%s", event_id_to_string(event->event_id));
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED: {
-            msg_id = esp_mqtt_client_subscribe(client, "inbound", 0);
-            ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+            char *inbound_topic;
+            if (tls) {
+                inbound_topic = "tls/inbound";
+            } else {
+                inbound_topic = "inbound";
+            }
+
+            int msg_id = esp_mqtt_client_subscribe(client, inbound_topic, 0);
+            ESP_LOGI(TAG, "sent subscribe to topic '%s' successful, msg_id=%d", inbound_topic, msg_id);
         } break;
 
-        case MQTT_EVENT_DATA: handle_event_data(event); break;
+        case MQTT_EVENT_DATA: handle_event_data(event, tls); break;
 
         default: break;
     }
 }
 
+const static bool TLS  = 1;
+const static bool NTLS = 0;
+
 static void mqtt_app_start(void) {
     esp_mqtt_client_config_t mqtt_cfg = { .broker.address.uri = CONFIG_BROKER_URL };
+
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
-    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, (void*)&NTLS);
     esp_mqtt_client_start(client);
+
+    esp_mqtt_client_config_t mqtt_tls_cfg = {
+        .broker = {
+            .address.uri = CONFIG_BROKER_TLS_URL,
+            .verification = {
+                .certificate = (const char *)ca_crt_start,
+                .skip_cert_common_name_check = true,
+            },
+        },
+        .credentials = {
+            .client_id = "esp32-tls",
+            .authentication = {
+                .certificate = (const char *)client_crt_start,
+                .key = (const char *)client_key_start,
+            }
+        }
+    };
+
+    esp_mqtt_client_handle_t client_tls = esp_mqtt_client_init(&mqtt_tls_cfg);
+    esp_mqtt_client_register_event(client_tls, ESP_EVENT_ANY_ID, mqtt_event_handler, (void*)&TLS);
+    esp_mqtt_client_start(client_tls);
 }
 
 static esp_err_t setup_nvs(void) {
@@ -265,6 +309,7 @@ static esp_err_t setup_nvs(void) {
 void app_main(void) {
     ESP_ERROR_CHECK(setup_nvs());
     wifi_connect();
+    esp_sntp_init();
     encrypt_init();
 
     gpio_set_level(LED_DEBUG_PIN, 0);
@@ -280,5 +325,5 @@ void app_main(void) {
     cmd_queue = xQueueCreate(64, sizeof(Command));
     assert(cmd_queue != NULL && "Could not create command queue!");
 
-    xTaskCreate(process_commands, "command_processor", 2048*2, NULL, 1, NULL);
+    process_commands();
 }

@@ -22,7 +22,8 @@ def main():
 """
 typedef struct {
     const char *name;
-    const char *key;
+    const char *tls_name;
+    const uint8_t key[32] __attribute__((nonstring));
 } Topic_Info;
 """, file=f)
 
@@ -30,6 +31,7 @@ typedef struct {
         for n in config:
             print("    [%s] = {" % n, file=f)
             print(f'        .name = "{config[n]['topic']}",', file=f)
+            print(f'        .tls_name = "tls/{config[n]['topic']}",', file=f)
             print(f'        .key  = "{config[n]['key']}",', file=f)
             print("    },", file=f)
         print("};\n", file=f)

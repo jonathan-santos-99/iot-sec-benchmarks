@@ -13,14 +13,14 @@ benchmarks = {
     "chacha20 (checksum)"        : (6, 2, 1, False),
 
     # # tls
-    # "plain text (TLS)"           : (7, 0, 0, True),
-    # "aes (TLS)"                  : (8, 1, 0, True),
-    # "chacha20 (TLS)"             : (9, 2, 0, True),
+    "plain text (TLS)"           : (7, 0, 0, True),
+    "aes (TLS)"                  : (8, 1, 0, True),
+    "chacha20 (TLS)"             : (9, 2, 0, True),
 
     # # tls + checksum
-    # "plain text (checksum+TLS)"  : (10, 0, 1, True),
-    # "aes (checksum+TLS)"         : (11, 1, 1, True),
-    # "chacha20 (checksum+TLS)"    : (12, 2, 1, True),
+    "plain text (checksum+TLS)"  : (10, 0, 1, True),
+    "aes (checksum+TLS)"         : (11, 1, 1, True),
+    "chacha20 (checksum+TLS)"    : (12, 2, 1, True),
 }
 
 def main():

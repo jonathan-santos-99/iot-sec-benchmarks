@@ -12,10 +12,15 @@ menu "Project Env Config"
         help
             WiFi password (WPA or WPA2) for the example to use.
 
-
     config BROKER_URL
         string "Broker URL"
-        default "mqtt://test.mosquitto.org"
+        default "mqtt://jonathan:648264@192.168.1.7:1883"
         help
             URL of the broker to connect to
+
+    config BROKER_TLS_URL
+        string "Broker TLS URL"
+        default "ssl://jonathan:648264@192.168.1.7:8883"
+        help
+            TLS URL of the broker to connect to
 endmenu
