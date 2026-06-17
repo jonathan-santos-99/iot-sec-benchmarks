@@ -39,6 +39,19 @@ func (a *Algorithm) UnmarshalText(text []byte) error {
 	return nil
 }
 
+func marshalText(a Algorithm) ([]byte, error) {
+	switch a {
+	case PlainText:
+		return []byte("PLAIN_TEXT"), nil
+	case AES:
+		return []byte("AES"), nil
+	case ChaCha20:
+		return []byte("CHACHA20"), nil
+	}
+
+	return nil, fmt.Errorf("Could not parse %s as algorithm", a)
+}
+
 func (a Algorithm) String() string {
 	return [...]string{"PLAIN_TEXT", "AES", "CHACHA20"}[a]
 }

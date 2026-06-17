@@ -2,22 +2,18 @@ import subprocess
 import sys
 
 benchmarks = {
-    # just encrypted
     "plain text"                 : (1, 0, 0, False),
     "aes"                        : (2, 1, 0, False),
     "chacha20"                   : (3, 2, 0, False),
 
-    # # checksum
     "plain text (checksum)"      : (4, 0, 1, False),
     "aes (checksum)"             : (5, 1, 1, False),
     "chacha20 (checksum)"        : (6, 2, 1, False),
 
-    # # tls
     "plain text (TLS)"           : (7, 0, 0, True),
     "aes (TLS)"                  : (8, 1, 0, True),
     "chacha20 (TLS)"             : (9, 2, 0, True),
 
-    # # tls + checksum
     "plain text (checksum+TLS)"  : (10, 0, 1, True),
     "aes (checksum+TLS)"         : (11, 1, 1, True),
     "chacha20 (checksum+TLS)"    : (12, 2, 1, True),

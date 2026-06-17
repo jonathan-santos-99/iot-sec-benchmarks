@@ -2,12 +2,16 @@ package metrics
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fishSim/internal/ecryption"
 	"fishSim/internal/topics"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,34 +21,76 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-type Metric struct {
-	id        int
-	algorithm ecryption.Algorithm
-	start     time.Time
-	recvStart time.Time
-	end       *time.Time
-	recvEnd   *time.Time
-	mu        sync.Mutex
-	checksum  bool
-	tls       bool
-	reqs      []int64 // server timestamps
-	recvReqs  []int64 // server receive timestamps
-}
-
-var db = struct {
+type _db struct {
 	data map[int]*Metric
 	mu   sync.Mutex
-}{
-	data: make(map[int]*Metric),
+}
+
+type Service struct {
+	db       *_db
+	dataFile string
+}
+
+type Metric struct {
+	Id        int                 `json:"id"`
+	Algorithm ecryption.Algorithm `json:"algorithm"`
+	Start     int64               `json:"start"`
+	End       *int64              `json:"end"`
+	Checksum  bool                `json:"checksum"`
+	Tls       bool                `json:"tls"`
+	Reqs      []int64             `json:"reqs"`
 }
 
 type MetricsOutput struct {
 	Id       int    `json:"id"`
 	Reqs     []int  `json:"requests_per_second"`
-	RecvReqs []int  `json:"received_requests_per_second"`
 	Type     string `json:"type"`
 	Checksum bool   `json:"checksum"`
 	TLS      bool   `json:"tls"`
+}
+
+func NewService(dataFile string) *Service {
+	service := &Service{
+		db:       load(dataFile),
+		dataFile: dataFile,
+	}
+
+	return service
+}
+
+type outboundMessage struct {
+	cmdId     int
+	msgType   MsgType
+	timestamp int64
+	checksum  bool
+}
+
+type MsgType int
+
+const (
+	Start MsgType = iota
+	Continue
+	Stop
+)
+
+func (m *Metric) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Id        int     `json:"id"`
+		Algorithm string  `json:"algorithm"`
+		Start     int64   `json:"start"`
+		End       *int64  `json:"end"`
+		Checksum  bool    `json:"checksum"`
+		Tls       bool    `json:"tls"`
+		Reqs      []int64 `json:"reqs"`
+	}{
+		Id:        m.Id,
+		Algorithm: m.Algorithm.String(),
+		Start:     m.Start,
+		End:       m.End,
+		Checksum:  m.Checksum,
+		Tls:       m.Tls,
+		Reqs:      m.Reqs,
+	})
 }
 
 func bucketizePerSecond(timestamps []int64, start, end int64) []int {
@@ -69,84 +115,104 @@ func bucketizePerSecond(timestamps []int64, start, end int64) []int {
 	return out
 }
 
-func GetMetrics() []MetricsOutput {
-	db.mu.Lock()
-	records := make([]*Metric, 0, len(db.data))
-	for _, m := range db.data {
-		records = append(records, m)
+func (s *Service) GetMetrics() []MetricsOutput {
+	s.db.mu.Lock()
+	records := make([]Metric, 0, len(s.db.data))
+	for _, m := range s.db.data {
+		records = append(records, *m)
 	}
-	db.mu.Unlock()
+	s.db.mu.Unlock()
 
 	out := make([]MetricsOutput, 0, len(records))
-	for _, metric := range db.data {
-		metric.mu.Lock()
-		reqs := append([]int64(nil), metric.reqs...)
-		recvReqs := append([]int64(nil), metric.recvReqs...)
-		start := metric.start
-		var end *time.Time
-		if metric.end != nil {
-			t := *metric.end
+	for _, metric := range records {
+		reqs := append([]int64(nil), metric.Reqs...)
+		start := metric.Start
+		var end *int64
+		if metric.End != nil {
+			t := *metric.End
 			end = &t
 		}
-		recvStart := metric.recvStart
-		var recvEnd *time.Time
-		if metric.recvEnd != nil {
-			t := *metric.recvEnd
-			recvEnd = &t
-		}
-		id := metric.id
-		algo := metric.algorithm
-		checksum := metric.checksum
-		tls := metric.tls
 
-		metric.mu.Unlock()
-
-		if len(reqs) == 0 && len(recvReqs) == 0 {
-			continue
-		}
+		id := metric.Id
+		algo := metric.Algorithm
+		checksum := metric.Checksum
+		tls := metric.Tls
 
 		slices.Sort(reqs)
-		slices.Sort(recvReqs)
 
 		var reqsPerSec []int
 		if end != nil {
-			reqsPerSec = bucketizePerSecond(reqs, start.UnixNano(), end.UnixNano())
-		}
-
-		var recvPerSec []int
-		if recvEnd != nil {
-			recvPerSec = bucketizePerSecond(recvReqs, recvStart.UnixNano(), recvEnd.UnixNano())
+			reqsPerSec = bucketizePerSecond(reqs, start, *end)
 		}
 
 		out = append(out, MetricsOutput{
 			Id:       id,
 			Type:     algo.String(),
 			Reqs:     reqsPerSec,
-			RecvReqs: recvPerSec,
 			Checksum: checksum,
 			TLS:      tls,
 		})
 	}
 
+	slices.SortFunc(out, func(a, b MetricsOutput) int {
+		return cmp.Compare(a.Id, b.Id)
+	})
+
 	return out
 }
 
-type MsgType int
+func persist(dataFile string, db *_db) {
+	db.mu.Lock()
+	data := make([]Metric, 0)
+	for _, v := range db.data {
+		data = append(data, *v)
+	}
+	db.mu.Unlock()
 
-const (
-	Start MsgType = iota
-	Continue
-	Stop
-)
+	raw, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("Could not marshal metric json because of %s\n", err)
+	}
 
-type outboundMessage struct {
-	cmdId     int
-	msgType   MsgType
-	timestamp int64
-	checksum  bool
+	err = os.WriteFile(dataFile, raw, 0644)
+	if err != nil {
+		log.Printf("Could not write metric json file because of %s\n", err)
+	}
+
+	log.Printf("Persisted metrics in file %s\n", dataFile)
 }
 
-func HandleMessage(c mqtt.Client, message mqtt.Message) {
+func load(dataFile string) *_db {
+	data := make([]Metric, 0)
+	file, err := os.OpenFile(dataFile, os.O_RDONLY|os.O_CREATE, 0666)
+	if err != nil {
+		log.Fatalf("Could not open file %s because of %s\n", dataFile, err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("Could not read file %s because of %s\n", dataFile, err)
+	}
+
+	if len(content) == 0 {
+		return &_db{data: make(map[int]*Metric)}
+	}
+
+	err = json.Unmarshal(content, &data)
+	if err != nil {
+		log.Fatalf("Could not unmarshall file %s because of %s\n", dataFile, err)
+	}
+
+	db := &_db{data: make(map[int]*Metric, len(data))}
+	for _, metric := range data {
+		db.data[metric.Id] = &metric
+	}
+
+	return db
+}
+
+func (s *Service) HandleMessage(c mqtt.Client, message mqtt.Message) {
 	topic, tls := strings.CutPrefix(message.Topic(), "tls/")
 
 	algorithm, ok := topics.FindAlgorithm(topic)
@@ -164,50 +230,47 @@ func HandleMessage(c mqtt.Client, message mqtt.Message) {
 
 	switch parsedMessage.msgType {
 	case Start:
-		db.mu.Lock()
-		defer db.mu.Unlock()
-
 		record := new(Metric)
-		record.algorithm = algorithm
-		record.id = parsedMessage.cmdId
-		record.checksum = parsedMessage.checksum
-		record.start = time.Unix(0, parsedMessage.timestamp)
-		record.recvStart = time.Now()
-		record.tls = tls
-		db.data[parsedMessage.cmdId] = record
+		record.Algorithm = algorithm
+		record.Id = parsedMessage.cmdId
+		record.Checksum = parsedMessage.checksum
+		record.Start = parsedMessage.timestamp
+		record.Tls = tls
+		s.db.mu.Lock()
+		s.db.data[parsedMessage.cmdId] = record
+		s.db.mu.Unlock()
 		log.Printf("Start gathering data of benchmark %d\n", parsedMessage.cmdId)
 
 	case Continue:
-		db.mu.Lock()
-		record, ok := db.data[parsedMessage.cmdId]
-		db.mu.Unlock()
+		s.db.mu.Lock()
+		defer s.db.mu.Unlock()
+		record, ok := s.db.data[parsedMessage.cmdId]
 		if !ok {
 			log.Printf("Ignoring data for unknown benchmark id=%d", parsedMessage.cmdId)
 			return
 		}
 
-		record.mu.Lock()
-		defer record.mu.Unlock()
-		if record.end != nil {
+		if record.End != nil {
 			log.Printf("Ignoring data because end benchmark already arrived")
 			return
 		}
 
-		record.reqs = append(record.reqs, parsedMessage.timestamp)
-		record.recvReqs = append(record.recvReqs, time.Now().UnixNano())
+		record.Reqs = append(record.Reqs, parsedMessage.timestamp)
 
 	case Stop:
-		db.mu.Lock()
-		record, ok := db.data[parsedMessage.cmdId]
-		db.mu.Unlock()
+		s.db.mu.Lock()
+		record, ok := s.db.data[parsedMessage.cmdId]
+		s.db.mu.Unlock()
+
 		if !ok {
 			log.Printf("Ignoring stop for unknown benchmark id=%d", parsedMessage.cmdId)
 			return
 		}
 
+		t := parsedMessage.timestamp
+		record.End = &t
 		log.Printf("Finish gathering data of benchmark %d\n", parsedMessage.cmdId)
-		record.end = new(time.Unix(0, parsedMessage.timestamp))
-		record.recvEnd = new(time.Now())
+		persist(s.dataFile, s.db)
 	}
 }
 

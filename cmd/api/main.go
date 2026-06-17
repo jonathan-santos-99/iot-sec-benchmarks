@@ -14,9 +14,10 @@ import (
 )
 
 type application struct {
-	authService *auth.Service
-	renderer    *views.Renderer
-	sessions    map[string]string
+	authService    *auth.Service
+	metricsService *metrics.Service
+	renderer       *views.Renderer
+	sessions       map[string]string
 }
 
 func main() {
@@ -25,6 +26,7 @@ func main() {
 	mqtt.WARN = log.New(os.Stdout, "[MQTT_WARN]  ", 0)
 
 	pwfile := flag.String("pwfile", "data/pwfile", "The full path for users file")
+	dataFile := flag.String("db", "data/db", "Path where metrics will be persisted")
 	mqttServer := flag.String("mqtt_server", "tcp://127.0.0.1:1883",
 		"The full url of the MQTT server to connect to ex: tcp://127.0.0.1:1883")
 	mqttUsername := flag.String("mqtt_user", "", "A username to authenticate to the MQTT server")
@@ -41,9 +43,17 @@ func main() {
 	topics.ParseConfigFile(*mqttOutboundConfigFile)
 
 	authService := auth.NewService(*pwfile)
+	metriecsService := metrics.NewService(*dataFile)
 	renderer, err := views.NewRenderer()
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	app := application{
+		authService:    authService,
+		metricsService: metriecsService,
+		renderer:       renderer,
+		sessions:       make(map[string]string),
 	}
 
 	c := topics.StartClient(
@@ -54,13 +64,16 @@ func main() {
 	)
 
 	for _, topicInfo := range topics.OutboundTopics {
-		token := c.Subscribe(topicInfo.Topic, 0, metrics.HandleMessage)
+		token := c.Subscribe(topicInfo.Topic, 0, func(_c mqtt.Client, m mqtt.Message) {
+			app.metricsService.HandleMessage(_c, m)
+		})
+
 		if token.Wait() && token.Error() != nil {
 			panic(token.Error())
 		}
 	}
 
-	c = topics.StartTLSClient(
+	tlsC := topics.StartTLSClient(
 		*cafile,
 		*clientCrt,
 		*clientKey,
@@ -70,16 +83,13 @@ func main() {
 		topics.ClientId("server-tls-"),
 	)
 	for _, topicInfo := range topics.OutboundTopics {
-		token := c.Subscribe("tls/"+topicInfo.Topic, 0, metrics.HandleMessage)
+		token := tlsC.Subscribe("tls/"+topicInfo.Topic, 0, func(_c mqtt.Client, m mqtt.Message) {
+			app.metricsService.HandleMessage(_c, m)
+		})
+
 		if token.Wait() && token.Error() != nil {
 			panic(token.Error())
 		}
-	}
-
-	app := application{
-		authService: authService,
-		renderer:    renderer,
-		sessions:    make(map[string]string),
 	}
 
 	app.serve()
