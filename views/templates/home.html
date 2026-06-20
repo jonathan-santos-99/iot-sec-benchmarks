@@ -4,7 +4,7 @@
 
 {{define "content"}}
 <div class="dashboard-container">
-    <h1 class="dashboard-title">Dashboard</h1>
+    <h1 class="dashboard-title">Dashboards</h1>
     <div class="charts-grid">
         <section class="chart-panel">
             <h2>Requests por segundo</h2>
@@ -227,6 +227,8 @@
                 ds.data = entry.requests_per_second || [];
             });
 
+            chart.options.scales.y.max = globalMax;
+
             chart.update('none');
         }
 
@@ -246,11 +248,12 @@
 
                 const payload = await res.json();
 
-                all      = payload.data.filter(r =>  r.checksum &&  r.tls);
-                tls      = payload.data.filter(r => !r.checksum &&  r.tls);
-                checkSum = payload.data.filter(r =>  r.checksum && !r.tls);
-                encrypt  = payload.data.filter(r => !r.checksum && !r.tls);
+                globalMax  = Math.ceil(Math.max(...payload.data.flatMap(r => r.requests_per_second)) / 10) * 10;
 
+                all        = payload.data.filter(r =>  r.checksum &&  r.tls);
+                tls        = payload.data.filter(r => !r.checksum &&  r.tls);
+                checkSum   = payload.data.filter(r =>  r.checksum && !r.tls);
+                encrypt    = payload.data.filter(r => !r.checksum && !r.tls);
                 algorithms = Object.keys(groupByType(encrypt));
 
                 applyMetrics(all      , rpsAllChart);
