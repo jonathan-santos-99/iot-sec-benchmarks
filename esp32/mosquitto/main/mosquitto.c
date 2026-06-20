@@ -102,25 +102,34 @@ static String_View chop_until(String_View *sv, char delimiter) {
     return result;
 }
 
+static int parse_int_field(String_View field) {
+    char tmp[32];
+    memcpy(tmp, field.content, field.len);
+    tmp[field.len] = '\0';
+    return strtol(tmp, NULL, 10);
+}
+
 static void parse_command(Command *cmd, char *data, int data_len) {
     String_View sv = { data, data_len };
 
-    int parts[4] = {0};
     for (int i = 0; i < 4; i++) {
         String_View field = chop_until(&sv, ';');
-        if (field.len > 0) {
-            char *endptr = field.content + field.len;
-            parts[i] = strtol(field.content, &endptr, 10);
+        assert(field.len > 0 && field.len < 31);
+        switch (i) {
+            case 0: cmd->id             = parse_int_field(field); break;
+            case 1: cmd->algorithm      = parse_int_field(field); break;
+            case 2: cmd->duration_secs  = parse_int_field(field); break;
+            case 3: cmd->checksum       = parse_int_field(field); break;
         }
     }
 
-    cmd->id            = parts[0];
-    cmd->algorithm     = parts[1];
-    cmd->duration_secs = parts[2];
-    cmd->checksum      = parts[3];
+    ESP_LOGI(MQTT_TAG, "Parsed command: id: %d, algorithm: %d, duration_secs: %d, checksum: %d",
+        cmd->id, cmd->algorithm, cmd->duration_secs, cmd->checksum);
 }
 
 static void handle_event_data(esp_mqtt_event_handle_t event, bool tls) {
+    ESP_LOGI(MQTT_TAG, "Received data: %.*s", event->data_len, event->data);
+
     Command cmd = {0};
     parse_command(&cmd, event->data, event->data_len);
     cmd.client = event->client;
@@ -214,8 +223,8 @@ static void debug_led_off(void) {
 static void process_commands() {
     Command cmd;
     for (;;) {
-        if (xQueueReceive(cmd_queue, &cmd, portMAX_DELAY)) {
-            ESP_LOGI(MQTT_TAG, "Starting command %d", cmd.id);
+        if (xQueueReceive(cmd_queue, &cmd, portMAX_DELAY) == pdPASS) {
+            ESP_LOGI(MQTT_TAG, "Starting command %d. Checksum: %d", cmd.id, cmd.checksum);
             debug_led_on();
 
             const uint64_t duration_ns = cmd.duration_secs*1e9;
@@ -243,7 +252,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     esp_mqtt_client_handle_t client = event->client;
     bool tls = *(bool *)handler_args;
 
-    ESP_LOGI(MQTT_TAG, "%s", event_id_to_string(event->event_id));
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED: {
             char *inbound_topic;
@@ -259,7 +267,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
         case MQTT_EVENT_DATA: handle_event_data(event, tls); break;
 
-        default: break;
+        default: ESP_LOGI(MQTT_TAG, "%s", event_id_to_string(event->event_id)); break;
     }
 }
 
@@ -310,6 +318,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(setup_nvs());
     wifi_connect();
     esp_sntp_init();
+    srand(time(NULL));
     encrypt_init();
 
     gpio_set_level(LED_DEBUG_PIN, 0);
@@ -319,11 +328,10 @@ void app_main(void) {
     mbedtls_md_init(&sha256_ctx);
     mbedtls_md_setup(&sha256_ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
 
-    mqtt_app_start();
-    srand(time(NULL));
-
     cmd_queue = xQueueCreate(64, sizeof(Command));
     assert(cmd_queue != NULL && "Could not create command queue!");
+
+    mqtt_app_start();
 
     process_commands();
 }
