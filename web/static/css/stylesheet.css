@@ -116,22 +116,59 @@ code {
     color: #93c5fd;
 }
 
+/* ---- Dashboard layout ---- */
+.page-dashboard {
+    display: block;
+    padding: 0;
+}
+
+.dashboard-container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 3rem;
+}
+
+.dashboard-title {
+    color: #f1f5f9;
+    font-size: 1.6rem;
+    margin: 0 0 1.5rem;
+}
+
+.charts-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+}
+
+@media (max-width: 860px) {
+    .charts-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 .chart-panel {
-    max-width: 900px;
-    margin: 2rem auto;
     padding: 1.5rem;
     background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    border-radius: 14px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+    transition: box-shadow 0.2s;
+}
+
+.chart-panel:hover {
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.13);
+}
+
+.chart-panel--wide {
+    grid-column: 1 / -1;
 }
 
 .chart-panel h2 {
-    margin-top: 0;
-    font-size: 1.1rem;
-    color: #333;
+    margin: 0 0 1rem;
+    font-size: 1.05rem;
+    color: #334155;
 }
 
 .chart-wrapper {
     position: relative;
-    height: 320px;
+    height: 300px;
 }

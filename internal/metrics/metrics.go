@@ -286,8 +286,6 @@ func parseMessage(algorithm ecryption.Algorithm, raw []byte) (outboundMessage, e
 		return outboundMessage{}, err
 	}
 
-	// log.Printf("Received: %s\n", decrypted)
-
 	const TOTAL_PARTS = 5
 	parts := strings.Split(string(decrypted), ";")
 	if len(parts) > TOTAL_PARTS {

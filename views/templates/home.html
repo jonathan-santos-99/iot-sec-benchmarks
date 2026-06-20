@@ -1,48 +1,69 @@
 {{define "title"}}Dashboard{{end}}
 
+{{define "pageClass"}}page-dashboard{{end}}
+
 {{define "content"}}
-<section class="chart-panel">
-    <h2>Requests por segundo</h2>
-    <div class="chart-wrapper">
-        <canvas id="rpsChart"></canvas>
-    </div>
-</section>
+<div class="dashboard-container">
+    <h1 class="dashboard-title">Dashboard</h1>
+    <div class="charts-grid">
+        <section class="chart-panel">
+            <h2>Requests por segundo</h2>
+            <div class="chart-wrapper">
+                <canvas id="rpsChart"></canvas>
+            </div>
+        </section>
 
-<section class="chart-panel">
-    <h2>Requests por segundo (Checksum)</h2>
-    <div class="chart-wrapper">
-        <canvas id="rpsChecksumChart"></canvas>
-    </div>
-</section>
+        <section class="chart-panel">
+            <h2>Requests por segundo (Checksum)</h2>
+            <div class="chart-wrapper">
+                <canvas id="rpsChecksumChart"></canvas>
+            </div>
+        </section>
 
-<section class="chart-panel">
-    <h2>Requests por segundo (TLS)</h2>
-    <div class="chart-wrapper">
-        <canvas id="rpsTLSChart"></canvas>
-    </div>
-</section>
+        <section class="chart-panel">
+            <h2>Requests por segundo (TLS)</h2>
+            <div class="chart-wrapper">
+                <canvas id="rpsTLSChart"></canvas>
+            </div>
+        </section>
 
-<section class="chart-panel">
-    <h2>Requests por segundo (Checksum+TLS)</h2>
-    <div class="chart-wrapper">
-        <canvas id="rpsAllChart"></canvas>
+        <section class="chart-panel">
+            <h2>Requests por segundo (Checksum+TLS)</h2>
+            <div class="chart-wrapper">
+                <canvas id="rpsAllChart"></canvas>
+            </div>
+        </section>
+
+        <section class="chart-panel">
+            <h2>RPS médio por algoritmo</h2>
+            <div class="chart-wrapper">
+                <canvas id="avgRpsChart"></canvas>
+            </div>
+        </section>
+
     </div>
-</section>
+</div>
 
 <script>
     (function renderRpsChart() {
+        let all = [];
+        let tls = [];
+        let checkSum = [];
+        let encrypt = [];
+        let algorithms = [];
+
         if (typeof Chart === 'undefined') {
             return setTimeout(renderRpsChart, 50);
         }
 
         const PALETTE = {
-            "PLAIN_TEXT" : { border : '#2563eb', bg : 'rgba( 37, 99, 235, 0.15)' },
-            "CHACHA20"   : { border : '#dc2626', bg : 'rgba(220, 38, 38, 0.15)'  },
-            "AES"        : { border : '#16a34a', bg : 'rgba( 22, 163, 74, 0.15)' },
+            "PLAIN_TEXT" : 'rgba( 37, 99, 235, 1)',
+            "CHACHA20"   : 'rgba(220, 38, 38, 1)',
+            "AES"        : 'rgba( 22, 163, 74, 1)',
         };
 
-        function createChart(clazz) {
-            const canvas = document.getElementById(clazz);
+        function createChart(id) {
+            const canvas = document.getElementById(id);
             if (!canvas) return;
 
             return new Chart(canvas.getContext('2d'), {
@@ -68,6 +89,78 @@
             });
         }
 
+        function createBarChart(id, yLabel) {
+            const canvas = document.getElementById(id);
+            if (!canvas) return;
+
+            return new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: { labels: [], datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        title: { display: false },
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: yLabel },
+                        },
+                    },
+                },
+            });
+        }
+
+        function colorFor(type) {
+            return PALETTE[type] || 'rgba(100,116,139,0.15)';
+        }
+
+        function avg(arr) {
+            if (!arr || arr.length === 0) return 0;
+            return arr.reduce((a, b) => a + b, 0) / arr.length;
+        }
+
+        function groupByType(data) {
+            return data.reduce((acc, e) => {
+                const t = e.type || 'UNKNOWN';
+                if (acc[t]) {
+                    acc[t].push(e);
+                } else {
+                    acc[t] = [e];
+                }
+                return acc;
+            }, {});
+        }
+
+        function renderAvgRps(chart) {
+            if (!chart) return;
+
+            const configs = [
+                { label: 'Base',              data: encrypt },
+                { label: 'Checksum',          data: checkSum},
+                { label: 'TLS',               data: tls     },
+                { label: 'Checksum + TLS',    data: all     },
+            ];
+
+            chart.data.labels = configs.map(c => c.label);
+            chart.data.datasets = algorithms.map(t => {
+                const c = colorFor(t);
+                return {
+                    label: t,
+                    data: configs.map(cfg => {
+                        const entries = cfg.data.filter(e => (e.type || 'UNKNOWN') === t);
+                        return avg(entries.map(e => avg(e.requests_per_second)));
+                    }),
+                    borderColor: c,
+                    backgroundColor: c,
+                };
+            });
+            chart.update('none');
+        }
+
         function datasetFor(chart, type, index) {
             let ds = chart.data.datasets.find((d) => d.label === type);
             if (ds) return ds;
@@ -76,8 +169,8 @@
             ds = {
                 label: type,
                 data: [],
-                borderColor: color.border,
-                backgroundColor: color.bg,
+                borderColor: color,
+                backgroundColor: color,
                 tension: 0.3,
                 fill: false,
             };
@@ -103,6 +196,8 @@
         const rpsTlsChart       = createChart('rpsTLSChart');
         const rpsChecksumChart  = createChart('rpsChecksumChart');
         const rpsChart          = createChart('rpsChart');
+        const avgRpsChart       = createBarChart('avgRpsChart', 'RPS médio');
+        const overheadChart     = createBarChart('overheadChart', 'Overhead (%)');
 
         async function fetchMetrics() {
             try {
@@ -113,14 +208,19 @@
 
                 const payload = await res.json();
 
-                const all      = payload.data.filter(r =>  r.checksum &&  r.tls);
-                const tls      = payload.data.filter(r => !r.checksum &&  r.tls);
-                const checkSum = payload.data.filter(r =>  r.checksum && !r.tls);
-                const encrypt  = payload.data.filter(r => !r.checksum && !r.tls);
+                all      = payload.data.filter(r =>  r.checksum &&  r.tls);
+                tls      = payload.data.filter(r => !r.checksum &&  r.tls);
+                checkSum = payload.data.filter(r =>  r.checksum && !r.tls);
+                encrypt  = payload.data.filter(r => !r.checksum && !r.tls);
+
+                algorithms = Object.keys(groupByType(encrypt));
+
                 applyMetrics(all      , rpsAllChart);
                 applyMetrics(tls      , rpsTlsChart);
                 applyMetrics(checkSum , rpsChecksumChart);
                 applyMetrics(encrypt  , rpsChart);
+
+                renderAvgRps(avgRpsChart);
             } catch (err) {
                 console.error('Falha ao buscar /metrics:', err);
             }

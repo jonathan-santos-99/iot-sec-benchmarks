@@ -27,13 +27,13 @@ def main():
     ca_file  = sys.argv[5]
 
     for k in benchmarks:
-        print(f"Bechmark for {k} queued!")
         id, algorithm, checksum, tls = benchmarks[k]
+        msg = f"{id};{algorithm};{duration};{checksum}"
         if not tls:
             subprocess.run([
                 "mosquitto_pub",
                 "-t", topic,
-                "-m", f"{id};{algorithm};{duration};{checksum}",
+                "-m", msg,
                 "-u", user,
                 "-P", password
             ])
@@ -43,10 +43,12 @@ def main():
                 "-p", "8883",
                 "--cafile", ca_file,
                 "-t", f"tls/{topic}",
-                "-m", f"{id};{algorithm};{duration};{checksum}",
+                "-m", msg,
                 "-u", user,
                 "-P", password
             ])
+        print(f"Bechmark for {k} queued: {msg}")
+
 
 if __name__ == '__main__':
     main()
