@@ -2,11 +2,6 @@ bin/
 data/**
 **.vscode
 .env
-mosquitto/config/pwfile
-mosquitto/data/*
-mosquitto/log/*
-mosquitto/certs/*
-certs/*
 **/build
 **/managed_components
 esp32/mosquitto/sdkconfig*
