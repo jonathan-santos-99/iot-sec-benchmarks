@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 devices = [
-    # "server",
+    "server",
     "backend",
     "sensor-001"
 ]

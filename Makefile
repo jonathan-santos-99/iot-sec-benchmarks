@@ -1,5 +1,5 @@
 MQTT_USER := jonathan
-MQTT_PASS := 648264
+MQTT_PASS := 123456
 MQTT_CONTAINER_NAME := mqtt5
 
 MQTT_SERVER          := 127.0.0.1
@@ -12,7 +12,7 @@ MQTT_SENSOR_KEY_FILE   := ./certs/sensor-001-key.pem
 MQTT_BANCKEND_CRT_FILE := ./certs/backend-crt.pem
 MQTT_BANCKEND_KEY_FILE := ./certs/backend-key.pem
 
-BENCHMARK_DURATION_SECS := 60
+BENCHMARK_DURATION_SECS := 10
 
 build:
 	go build -o bin/fishSim ./cmd/api
@@ -44,12 +44,18 @@ mock_mic:
                                  -mqtt_crt_file        $(MQTT_SENSOR_CRT_FILE) \
                                  -mqtt_key_file        $(MQTT_SENSOR_KEY_FILE)
 
-setup_moquistto:
+mosquitto/config/pwfile:
+	touch ./mosquitto/config/pwfile
+
+mosquitto_up: mosquitto/config/pwfile
 	@echo "setting up mosquitto container"
 	docker compose up
-	./mosquitto/setup_mosquitto.sh $(MQTT_CONTAINER_NAME) \
-								    $(MQTT_USER)          \
-	 							    $(MQTT_PASS)
+
+setup_mosquitto:
+	chown 1883:1883 ./mosquitto/certs
+	chown 1883:1883 ./mosquitto/data
+	chmod 0700 ./mosquitto/data/pwfile
+	docker exec "$(MQTT_CONTAINER_NAME)" mosquitto_passwd -b /mosquitto/config/pwfile "$(MQTT_USER)" "$(MQTT_PASS)"
 
 benchmark: ./scripts/benchmark_starter.py
 	@python3 ./scripts/benchmark_starter.py $(MQTT_INBOUND_TOPIC)      \
