@@ -1,4 +1,6 @@
-include .env
+MQTT_USER := jonathan
+MQTT_PASS := 648264
+MQTT_CONTAINER_NAME := mqtt5
 
 MQTT_SERVER          := 127.0.0.1
 MQTT_INBOUND_TOPIC   := inbound
@@ -45,10 +47,9 @@ mock_mic:
 setup_moquistto:
 	@echo "setting up mosquitto container"
 	docker compose up
-	CONTAINER_NAME=mqtt5
-	@source ./mosquitto/setup_moquistto.sh $(CONTAINER_NAME) \
-	 								       $(MQTT_USER)      \
-	 									   $(MQTT_PASS)
+	./mosquitto/setup_mosquitto.sh $(MQTT_CONTAINER_NAME) \
+								    $(MQTT_USER)          \
+	 							    $(MQTT_PASS)
 
 benchmark: ./scripts/benchmark_starter.py
 	@python3 ./scripts/benchmark_starter.py $(MQTT_INBOUND_TOPIC)      \
